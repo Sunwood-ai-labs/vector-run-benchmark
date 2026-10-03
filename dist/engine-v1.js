@@ -1,0 +1,34 @@
+// VECTOR RUN: deterministic simulation. No browser, clock, random(), or display dependencies.
+export const VERSION = '1.0.0';
+export const CONFIG = Object.freeze({hz:120,worldWidth:800,worldHeight:360,ground:278,playerX:116,playerWidth:34,playerHeight:42,gravity:1600,jumpVelocity:600,initialSpeed:250,maxSpeed:580,speedRamp:2.2,firstEncounter:3,minimumInterval:1.28,initialInterval:2.18,maxFrameGapMs:100,distanceUnitsPerMetre:10});
+export function hash(text){let h=2166136261;for(const c of text){h^=c.charCodeAt(0);h=Math.imul(h,16777619);}return (h>>>0).toString(16).padStart(8,'0');}
+export const CONFIG_HASH=hash(JSON.stringify(CONFIG));
+export function rng(seed){let a=seed>>>0;return()=>{a=(a+0x6D2B79F5)>>>0;let t=a;t=Math.imul(t^(t>>>15),t|1);t^=t+Math.imul(t^(t>>>7),t|61);return((t^(t>>>14))>>>0)/4294967296;};}
+export const speedAt=t=>Math.min(CONFIG.maxSpeed,CONFIG.initialSpeed+CONFIG.speedRamp*t);
+export const levelAt=t=>Math.min(10,1+Math.floor(t/15));
+export function distanceAt(t){const cap=(CONFIG.maxSpeed-CONFIG.initialSpeed)/CONFIG.speedRamp;return t<=cap?CONFIG.initialSpeed*t+CONFIG.speedRamp*t*t/2:CONFIG.initialSpeed*cap+CONFIG.speedRamp*cap*cap/2+CONFIG.maxSpeed*(t-cap);}
+export class Course{
+ constructor(seed){this.random=rng(seed);this.items=[];this.nextTime=CONFIG.firstEncounter;this.count=0;}
+ fillUntil(time){while(this.nextTime<time+5){const t=this.nextTime,l=levelAt(t);const width=26+Math.floor(this.random()*(l<3?17:33));const height=36+Math.floor(this.random()*(l<3?15:37));const item={id:this.count++,center:distanceAt(t)+CONFIG.playerX+CONFIG.playerWidth/2,width,height,encounterTime:t,kind:height>55?'tall':'wide'};this.items.push(item);const ramp=Math.min(1,t/150);this.nextTime+=Math.max(CONFIG.minimumInterval,CONFIG.initialInterval-.78*ramp)+this.random()*(.55-.32*ramp);}}
+}
+export class Engine{
+ constructor(seed=101){if(!Number.isInteger(seed)||seed<0||seed>4294967295)throw new Error('Seed must be an unsigned 32-bit integer');this.seed=seed;this.tick=0;this.y=0;this.vy=0;this.held=false;this.dead=false;this.distance=0;this.collision=null;this.jumps=0;this.course=new Course(seed);this.course.fillUntil(0);this.events=[];}
+ get seconds(){return this.tick/CONFIG.hz;}
+ input(action,meta={}){if(!['jump','release'].includes(action))throw new Error('Unknown action');if(this.dead)return{accepted:false,reason:'terminal',tick:this.tick};let accepted=false;if(action==='release'){accepted=this.held;this.held=false;}else if(!this.held){this.held=true;if(this.y===0&&this.vy===0){this.vy=CONFIG.jumpVelocity;this.jumps++;accepted=true;}}
+ const e={tick:this.tick,action,accepted,...meta};this.events.push(e);return e;}
+ step(){if(this.dead)return;this.tick++;this.distance=distanceAt(this.seconds);if(this.y>0||this.vy>0){this.y+=this.vy/CONFIG.hz;this.vy-=CONFIG.gravity/CONFIG.hz;if(this.y<=0){this.y=0;this.vy=0;}}
+ this.course.fillUntil(this.seconds);const left=CONFIG.playerX,right=left+CONFIG.playerWidth;for(const o of this.course.items){const x=o.center-this.distance-o.width/2;if(x>right+100)break;if(x+o.width>left&&x<right&&this.y<o.height){this.dead=true;this.collision={obstacleId:o.id,tick:this.tick};break;}}
+ // Keep only recent obstacles; generation state is independent of pruning and rendering.
+ this.course.items=this.course.items.filter(o=>o.center-this.distance+o.width/2>-60);}
+ snapshot(){return{seed:this.seed,tick:this.tick,seconds:this.seconds,distance:this.distance,y:this.y,vy:this.vy,held:this.held,dead:this.dead,jumps:this.jumps,collision:this.collision,nextEncounter:this.course.nextTime,rngCount:this.course.count,obstacles:this.course.items.map(o=>({...o}))};}
+}
+export class RealtimeClock{
+ constructor(now){this.last=now;this.accumulator=0;this.maxGap=0;this.frameCount=0;this.invalidReason=null;}
+ advance(now,engine){const elapsed=now-this.last;if(!Number.isFinite(elapsed)||elapsed<0){this.invalidReason='clock_error';return this.invalidReason;}this.last=now;this.maxGap=Math.max(this.maxGap,elapsed);this.frameCount++;if(elapsed>CONFIG.maxFrameGapMs){this.invalidReason='frame_gap';return this.invalidReason;}this.accumulator+=elapsed;const dt=1000/CONFIG.hz;while(this.accumulator+1e-8>=dt&&!engine.dead){engine.step();this.accumulator-=dt;}return null;}
+}
+export function replayRecord(record){if(!record||record.version!==VERSION||record.configHash!==CONFIG_HASH||(record.config&&hash(JSON.stringify(record.config))!==CONFIG_HASH))throw new Error('Version/config mismatch');if(!['collision','cancelled','frame_gap','hidden_tab','focus_lost','clock_error'].includes(record.endReason))throw new Error('Invalid end reason');if(!Number.isFinite(record.distanceWorld)||!Number.isInteger(record.jumps)||record.jumps<0)throw new Error('Invalid result fields');if(!Number.isInteger(record.finalTick)||record.finalTick<0||record.finalTick>CONFIG.hz*3600)throw new Error('Invalid replay length (maximum 1 hour)');if(!Array.isArray(record.inputs)||record.inputs.length>100000)throw new Error('Invalid input log');const e=new Engine(record.seed);let i=0,last=-1;for(const v of record.inputs){if(!Number.isInteger(v.tick)||v.tick<last||v.tick>record.finalTick||!['jump','release'].includes(v.action))throw new Error('Invalid input order');last=v.tick;}
+ for(let t=0;t<=record.finalTick;t++){while(i<record.inputs.length&&record.inputs[i].tick===t){const applied=e.input(record.inputs[i].action);if(record.inputs[i].accepted!==undefined&&applied.accepted!==record.inputs[i].accepted)throw new Error('Input acceptance mismatch');i++;}if(t<record.finalTick){if(e.dead)throw new Error('Replay extends beyond terminal state');e.step();}}
+ const matched=e.tick===record.finalTick&&Math.abs(e.distance-record.distanceWorld)<1e-6&&e.dead===(record.endReason==='collision')&&e.jumps===record.jumps&&(!record.finalStateHash||hash(JSON.stringify(e.snapshot()))===record.finalStateHash);
+ return{engine:e,matched,kind:'offline_replay',neverBenchmark:true};}
+export function controllerKind(record){const sources=record.inputSources??[];return sources.includes('agent')&&sources.includes('manual')?'mixed':sources.includes('agent')?'agent':sources.includes('manual')?'manual':'no_input';}
+export function summarize(records,seeds=[101,202,303,404,505]){const eligible=records.filter(r=>r.mode==='benchmark'&&r.valid&&r.endReason==='collision');const selected=seeds.map(seed=>eligible.find(r=>r.seed===seed)).filter(Boolean);const controllers=[...new Set(selected.map(controllerKind))];const mixedControllers=controllers.length>1||controllers.includes('mixed');return{n:selected.length,totalSeeds:seeds.length,meanDistanceMetres:selected.length&&!mixedControllers?selected.reduce((s,r)=>s+r.distanceMetres,0)/selected.length:null,smallN:selected.length<seeds.length,controllers,mixedControllers,policy:'first valid completed benchmark per fixed seed; mixed controller mean suppressed',seeds:seeds.map(seed=>({seed,completed:selected.some(r=>r.seed===seed)}))};}
