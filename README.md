@@ -2,11 +2,15 @@
 
 A deterministic endless runner for repeatable browser-control experiments. Original geometric graphics; no Chrome assets or JevDash source.
 
+自動で右へ走り続ける、再現性重視のブラウザゲームです。同じ Seed なら同じコース。1段・2段ジャンプを切り替え、移動距離を比較できます。
+
 ## ローカルで起動する / Run locally
 
 Node.js 20以上が必要です。外部パッケージのインストールは不要です。
 
 ```sh
+git clone https://github.com/Sunwood-ai-labs/vector-run-benchmark.git
+cd vector-run-benchmark
 npm test
 npm run serve
 ```
@@ -18,7 +22,9 @@ npm run test:http
 PORT=4174 npm run serve
 ```
 
-`npm test` includes engine tests, simulated-DOM application fixtures, and a real local HTTP source-serving smoke test. These checks do **not** establish that interactive browser play or desktop/mobile rendered screenshots have been verified.
+`npm test` includes 25 engine, simulated-DOM application, compatibility and real local HTTP checks. GitHub Actions runs the same suite on pushes and pull requests.
+
+**検証状況:** 自動テスト25件とローカル HTTP 起動を確認済み。実ブラウザのプレイ操作・PC/モバイル画面のスクリーンショットレビューは未完了です。自動テストの合格を視覚確認済みとは扱いません。[QA の手順と検証範囲](docs/QA.md) を参照してください。
 
 ## 操作とルール / Jump rules
 
