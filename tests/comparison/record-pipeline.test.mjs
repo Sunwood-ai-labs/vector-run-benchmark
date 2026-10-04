@@ -161,6 +161,17 @@ test('remote report provenance rejects runner SHA drift and explicit weak-proven
   await assert.rejects(loadFormalResultsBundle({formalResultsPath:cleanFixture.formalResultsPath, contract:fixtureContract()}), /weak_provenance_quarantined or aggregateEligible:false/);
 });
 
+test('runner provenance accepts a published filename alias only when the exact report SHA matches', async t => {
+  const root = await tempRoot(t);
+  const fixture = await makeFormalFixture(root);
+  const runnerPath = fixture.reportPaths.kai.slice(0, -'.game.json'.length) + '.runner.json';
+  const runner = JSON.parse(await readFile(runnerPath, 'utf8'));
+  runner.gameReport.file = 'kai-q3-published.game.json';
+  await writeJson(runnerPath, runner);
+  const bundle = await loadFormalResultsBundle({formalResultsPath:fixture.formalResultsPath, contract:fixtureContract()});
+  assert.equal(bundle.reports.length, 8);
+});
+
 test('results-dir discovery skips .private reports but rejects any Sol-Reasoning game report', async t => {
   const root = await tempRoot(t);
   const resultsDir = path.join(root, 'results');

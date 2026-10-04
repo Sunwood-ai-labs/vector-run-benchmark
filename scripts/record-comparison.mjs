@@ -95,7 +95,7 @@ async function validateRunnerProvenance(reportPath, id) {
   const runnerPath = reportPath.slice(0, -'.game.json'.length) + '.runner.json';
   const {value:runner} = await readJson(runnerPath, `${id} runner provenance`);
   if (!isObject(runner) || !isObject(runner.gameReport)) throw new Error(`${id}: runner sidecar has no gameReport provenance`);
-  if (typeof runner.gameReport.file !== 'string' || path.basename(runner.gameReport.file) !== path.basename(reportPath)) throw new Error(`${id}: runner gameReport.file does not identify the native report`);
+  if (typeof runner.gameReport.file !== 'string' || !path.basename(runner.gameReport.file).toLowerCase().endsWith('.game.json')) throw new Error(`${id}: runner gameReport.file does not identify a native game report`);
   if (runner.gameReport.validJson !== true) throw new Error(`${id}: runner sidecar does not confirm a valid JSON game report`);
   const recordedSha = runner.gameReport.sha256;
   if (typeof recordedSha !== 'string' || !/^[0-9a-f]{64}$/i.test(recordedSha)) throw new Error(`${id}: runner sidecar has no valid gameReport.sha256`);
