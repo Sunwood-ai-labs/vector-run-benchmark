@@ -15,6 +15,7 @@ export const CAPTURE_MANIFEST_NAME = 'capture-inputs.json';
 export const VIDEO_SIZE = Object.freeze({width:1920, height:1080});
 export const VIDEO_DURATION_SECONDS = 33;
 export const VIDEO_FPS = 30;
+const TERMINAL_PLAYBACK_STATES = Object.freeze(['complete','failed','invalid_clock_gap','invalid_start_spread']);
 
 const MIME = new Map([
   ['.css', 'text/css; charset=utf-8'],
@@ -239,6 +240,10 @@ export function validateCaptureQuality({probe, decoded, timing}) {
   return {valid:errors.length===0, errors, width, height, duration, frameRate, frameCount, codec:stream?.codec_name ?? null};
 }
 
+export function isTerminalPlaybackState(status) {
+  return TERMINAL_PLAYBACK_STATES.includes(status);
+}
+
 function parseFrameRate(value) {
   if (typeof value !== 'string') return Number(value);
   const [numerator, denominator] = value.split('/').map(Number);
@@ -438,7 +443,7 @@ export async function captureComparison(bundle, {outputDir, contract, browserPat
     await page.waitForFunction(() => window.vectorComparison.runtime.status === 'playing' || window.vectorComparison.runtime.status === 'failed', null, {timeout:10000});
     const runtimeState = await page.evaluate(() => ({status:window.vectorComparison.runtime.status, startedAt:window.vectorComparison.runtime.startedAt}));
     if (runtimeState.status !== 'playing' || !Number.isFinite(runtimeState.startedAt)) throw new Error(`comparison player did not start: ${runtimeState.status}`);
-    await page.waitForFunction(() => window.vectorComparison.runtime.status === 'complete' || window.vectorComparison.runtime.status === 'failed', null, {timeout:50000});
+    await page.waitForFunction(states => states.includes(window.vectorComparison.runtime.status), [...TERMINAL_PLAYBACK_STATES], {timeout:50000});
     const hostElapsedMs = performance.now() - playerStartedAt;
     const finished = await page.evaluate(() => ({
       status:window.vectorComparison.runtime.status,

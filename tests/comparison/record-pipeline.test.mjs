@@ -11,6 +11,7 @@ import {
   buildCaptureQaArtifact,
   buildCaptureManifest,
   discoverResultsDirBundle,
+  isTerminalPlaybackState,
   loadFormalResultsBundle,
   parseArgs,
   validateCaptureQuality
@@ -178,6 +179,14 @@ test('probe QA requires a decoded 1920x1080 33-second recording and clean realti
   assert.equal(validateCaptureQuality({...fixture, probe:{...fixture.probe,format:{duration:'31.5'}}}).valid, false);
   assert.equal(validateCaptureQuality({...fixture, probe:{streams:[{codec_type:'video',width:1280,height:720}],format:{duration:'33'}}}).valid, false);
   assert.equal(validateCaptureQuality({...fixture, probe:{...fixture.probe,streams:[{...fixture.probe.streams[0],avg_frame_rate:'24/1'}]}}).valid, false);
+});
+
+test('capture watcher recognizes a terminal clock-gap rejection instead of timing out', () => {
+  assert.equal(isTerminalPlaybackState('complete'), true);
+  assert.equal(isTerminalPlaybackState('invalid_clock_gap'), true);
+  assert.equal(isTerminalPlaybackState('invalid_start_spread'), true);
+  assert.equal(isTerminalPlaybackState('failed'), true);
+  assert.equal(isTerminalPlaybackState('playing'), false);
 });
 
 test('capture QA proof keeps the exact ffprobe, timing, decode, and screenshot evidence', () => {
