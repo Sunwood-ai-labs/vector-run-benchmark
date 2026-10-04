@@ -231,10 +231,15 @@ test('capture manifest records relative paths, SHA256, and the static no-replay/
   const fixture = await makeFormalFixture(root);
   const bundle = await loadFormalResultsBundle({formalResultsPath:fixture.formalResultsPath, contract:fixtureContract()});
   const manifest = buildCaptureManifest(bundle, {outputDir:path.join(root, 'videos'), captureRequested:false});
+  const requestedSnapshot = buildCaptureManifest(bundle, {outputDir:path.join(root, 'videos'), captureRequested:true});
   assert.equal(manifest.manifestKind, 'vector-run-comparison-capture-inputs');
   assert.equal(manifest.cohort.schema, 'vector-run-decision-bench/v1');
   assert.equal(manifest.recording.status, 'preflight_only');
   assert.equal(manifest.recording.performed, false);
+  assert.equal(requestedSnapshot.recording.status,'capture_pending');
+  assert.equal(requestedSnapshot.recording.requested,true);
+  assert.equal(requestedSnapshot.recording.performed,false);
+  assert.equal('qaSha256' in requestedSnapshot.recording,false);
   assert.equal(manifest.staticSolReasoningTile.noReplay, true);
   assert.equal(manifest.staticSolReasoningTile.noScore, true);
   assert.equal(manifest.staticSolReasoningTile.score, null);
@@ -305,6 +310,7 @@ test('capture QA proof keeps the exact ffprobe, timing, decode, and screenshot e
   assert.deepEqual(artifact.video.probe, probe);
   assert.deepEqual(artifact.timing, timing);
   assert.equal(artifact.fullDecode.passed, true);
+  assert.equal(artifact.sourceManifestFile,'capture-inputs.json');
   assert.equal(artifact.sourceManifestSha256,'1'.repeat(64));
   assert.equal(artifact.visualQA.status,'pending');
   assert.deepEqual(artifact.qaFrames[0], {relativePath:'qa/start.png',sha256:'a'.repeat(64)});

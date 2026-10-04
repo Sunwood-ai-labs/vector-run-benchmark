@@ -35,3 +35,5 @@ source変更を先にcommitし、親のhandoffへSHAとCPU test結果を知ら�
 正式録画はbrowser clock上で30秒の物理traceを1×再生し、terminal結果を3秒保持します。time_limitはtick 3600でright-censoredのまま表示します。全tileの結果は共通時計が終わるまで残します。出力MP4はnotebook repositoryの videos/ に置きます。
 
 録画後はffprobeでMP4 codec・解像度・duration・frame rateを確認し、ffmpegで全フレームをdecodeします。開始・中間・終端の代表PNGを同じ videos/ 配下に抽出し、1920×1080・3×3 layout・静的Reasoning card・末尾のterminal holdを目視します。QA reportにsource manifest SHA、実browser duration、tile start spread、最大frame gap、decode結果、PNG pathsを記録します。すべて通るまでは正式MP4としてhandoffしません。
+
+`capture-inputs.json`は録画開始前に書くimmutable snapshotです。`capture-qa.json`はその実在file名とSHA256を参照し、MP4・PNG・probe・decodeの結果を持ちます。QAのshaをinputs manifestへ書き戻さず、手動visual QA更新後にもhashの循環やstale `qaSha256`が発生しない形を保ちます。

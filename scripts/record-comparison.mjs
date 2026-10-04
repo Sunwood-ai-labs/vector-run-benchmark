@@ -356,6 +356,7 @@ export function buildCaptureQaArtifact({video, probe, timing, decoded, browser, 
     browser,
     timing,
     captureLayout:layout,
+    sourceManifestFile:CAPTURE_MANIFEST_NAME,
     sourceManifestSha256,
     fullDecode:{passed:decoded, tool:'ffmpeg', mode:'full video decode to null output'},
     qaFrames:frames,
@@ -667,20 +668,11 @@ async function main() {
   await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
   process.stdout.write(`Native preflight passed (${bundle.reports.length} reports, q${bundle.questionCount}); manifest: ${manifestPath}\n`);
   if (!options.capture) return;
-  try {
-    manifest.recording = {...manifest.recording, status:'capturing'};
-    await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
-    const capture = await captureComparison(bundle, {outputDir, contract, browserPath:options.browserPath, headed:options.headed, sourceManifestSha256:await hashPath(manifestPath)});
-    const qaPath = path.join(outputDir, 'capture-qa.json');
-    await writeFile(qaPath, `${JSON.stringify(capture.qaArtifact, null, 2)}\n`, 'utf8');
-    manifest.recording = {...manifest.recording, status:'visual_review_pending', performed:true, automatedChecks:'passed', outputFile:capture.file, durationSeconds:capture.durationSeconds, resolution:capture.resolution, decoded:capture.decoded, browser:capture.browser, timing:capture.timing, captureLayout:capture.layout, qaFrames:capture.qaFrames, qaFile:path.basename(qaPath), qaSha256:await hashPath(qaPath)};
-    await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
-    process.stdout.write(`Automated capture QA passed; PNG visual review pending: ${path.join(outputDir, capture.file)}\n`);
-  } catch (error) {
-    manifest.recording = {...manifest.recording, status:'failed', performed:false, error:String(error?.message ?? error)};
-    await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
-    throw error;
-  }
+  const sourceManifestSha256 = await hashPath(manifestPath);
+  const capture = await captureComparison(bundle, {outputDir, contract, browserPath:options.browserPath, headed:options.headed, sourceManifestSha256});
+  const qaPath = path.join(outputDir, 'capture-qa.json');
+  await writeFile(qaPath, `${JSON.stringify(capture.qaArtifact, null, 2)}\n`, 'utf8');
+  process.stdout.write(`Automated capture QA passed; PNG visual review pending: ${path.join(outputDir, capture.file)}\n`);
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
