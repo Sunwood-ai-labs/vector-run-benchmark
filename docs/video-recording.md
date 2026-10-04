@@ -22,6 +22,8 @@ T3 previewの録画を使うときは preview_status の後に preview_open を�
 
     node scripts/record-comparison.mjs --formal-results C:/Prj/decision-lane/handoffs/formal-results.json --output-dir C:/Prj/decision-lane/videos
 
+録画は既定でheadless Chromiumを使います。headless再生が100 msのframe gap gateに届かない環境では `--capture --headed` を付け、通常のChrome/Edge描画で再試行します。どちらも実ブラウザー時計での1×再生として計測し、100 msを超えれば録画を失敗扱いにします。
+
 source変更を先にcommitし、親のhandoffへSHAとCPU test結果を知らせます。正式録画は親のformal-results manifestに列挙された8本が個別gateを通ってから始めます。
 
 ## 録画・出力QA

@@ -30,11 +30,12 @@ const digestBytes = bytes => createHash('sha256').update(bytes).digest('hex');
 const posixRelative = (from, to) => path.relative(from, to).split(path.sep).join('/');
 
 export function parseArgs(argv) {
-  const options = {formalResults:null, resultsDir:null, evidence:null, output:null, capture:false, browserPath:null, help:false};
+  const options = {formalResults:null, resultsDir:null, evidence:null, output:null, capture:false, browserPath:null, headed:false, help:false};
   for (let index = 0; index < argv.length; index++) {
     const token = argv[index];
     if (token === '--help' || token === '-h') { options.help = true; continue; }
     if (token === '--capture') { options.capture = true; continue; }
+    if (token === '--headed') { options.headed = true; continue; }
     if (!token.startsWith('--')) throw new Error(`Unexpected argument: ${token}`);
     const value = argv[++index];
     if (value === undefined || value.startsWith('--')) throw new Error(`${token} requires a value`);
@@ -301,15 +302,15 @@ async function loadPlaywright() {
   catch (error) { throw new Error(`Playwright-core is required for --capture: ${error.message}`); }
 }
 
-async function launchBrowser(chromium, executablePath, tempRoot) {
+async function launchBrowser(chromium, executablePath, tempRoot, {headless = true} = {}) {
   const commonArgs = ['--no-first-run', '--no-default-browser-check', '--disable-background-timer-throttling', '--disable-renderer-backgrounding', '--disable-backgrounding-occluded-windows'];
   try {
-    const browser = await chromium.launch({headless:true, executablePath, args:commonArgs});
+    const browser = await chromium.launch({headless, executablePath, args:commonArgs});
     return {browser, mode:'playwright-launch', cleanup:async()=>browser.close()};
   } catch (launchError) {
     const profile = path.join(tempRoot, 'cdp-profile');
     await mkdir(profile, {recursive:true});
-    const child = spawn(executablePath, [...commonArgs, '--headless=new', '--remote-debugging-port=0', `--user-data-dir=${profile}`, 'about:blank'], {stdio:'ignore', windowsHide:true});
+    const child = spawn(executablePath, [...commonArgs, ...(headless?['--headless=new']:[]), '--remote-debugging-port=0', `--user-data-dir=${profile}`, 'about:blank'], {stdio:'ignore', windowsHide:true});
     const activePort = path.join(profile, 'DevToolsActivePort');
     let endpoint = null;
     for (let attempt = 0; attempt < 150; attempt++) {
@@ -394,7 +395,7 @@ async function extractQaFrames(ffmpeg, videoPath, outputDir) {
   return frames.map(frame => path.join('qa', `${frame.label}.png`));
 }
 
-export async function captureComparison(bundle, {outputDir, contract, browserPath = null, ffmpeg = 'ffmpeg', ffprobe = 'ffprobe'} = {}) {
+export async function captureComparison(bundle, {outputDir, contract, browserPath = null, headed = false, ffmpeg = 'ffmpeg', ffprobe = 'ffprobe'} = {}) {
   const absoluteOutput = assertExternalOutput(outputDir);
   const playwright = await loadPlaywright();
   const executable = await findBrowser(browserPath);
@@ -408,7 +409,7 @@ export async function captureComparison(bundle, {outputDir, contract, browserPat
   let context = null;
   let video = null;
   try {
-    launched = await launchBrowser(playwright.chromium, executable, tempRoot);
+    launched = await launchBrowser(playwright.chromium, executable, tempRoot, {headless:!headed});
     context = await launched.browser.newContext({viewport:VIDEO_SIZE, deviceScaleFactor:1, recordVideo:{dir:webmDir, size:VIDEO_SIZE}});
     const page = await context.newPage();
     await page.setViewportSize(VIDEO_SIZE);
@@ -495,7 +496,7 @@ export async function captureComparison(bundle, {outputDir, contract, browserPat
     });
     return {
       status:'complete',
-      browser:{mode:launched.mode, executable:path.basename(executable), viewport:VIDEO_SIZE},
+      browser:{mode:launched.mode, executable:path.basename(executable), headless:!headed, viewport:VIDEO_SIZE},
       file:path.basename(mp4Path),
       durationSeconds:qa.duration,
       resolution:{width:qa.width,height:qa.height},
@@ -515,10 +516,11 @@ export async function captureComparison(bundle, {outputDir, contract, browserPat
 function helpText() {
   return [
     'VECTOR RUN comparison recorder',
-    'node scripts/record-comparison.mjs --formal-results FILE --output-dir EXTERNAL_VIDEO_DIR [--evidence FILE] [--capture] [--browser-path FILE]',
-    'or: node scripts/record-comparison.mjs --results-dir DIR --output-dir EXTERNAL_VIDEO_DIR [--evidence FILE] [--capture]',
+    'node scripts/record-comparison.mjs --formal-results FILE --output-dir EXTERNAL_VIDEO_DIR [--evidence FILE] [--capture] [--headed] [--browser-path FILE]',
+    'or: node scripts/record-comparison.mjs --results-dir DIR --output-dir EXTERNAL_VIDEO_DIR [--evidence FILE] [--capture] [--headed]',
     'Default mode validates the eight native reports plus Sol-Reasoning unavailable evidence and writes capture-inputs.json only.',
-    '--capture runs the 1920x1080 1x browser trace replay, encodes a 33-second MP4, probes and fully decodes it, and extracts start/mid/end PNGs.'
+    '--capture runs the 1920x1080 1x browser trace replay, encodes a 33-second MP4, probes and fully decodes it, and extracts start/mid/end PNGs.',
+    '--headed runs Chrome/Edge with a visible window when headless rendering misses the real-time frame-gap gate.'
   ].join('\n');
 }
 
@@ -543,7 +545,7 @@ async function main() {
   try {
     manifest.recording = {...manifest.recording, status:'capturing'};
     await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
-    const capture = await captureComparison(bundle, {outputDir, contract, browserPath:options.browserPath});
+    const capture = await captureComparison(bundle, {outputDir, contract, browserPath:options.browserPath, headed:options.headed});
     const qaPath = path.join(outputDir, 'capture-qa.json');
     await writeFile(qaPath, `${JSON.stringify(capture.qaArtifact, null, 2)}\n`, 'utf8');
     manifest.recording = {...manifest.recording, status:'complete', performed:true, outputFile:capture.file, durationSeconds:capture.durationSeconds, resolution:capture.resolution, decoded:capture.decoded, browser:capture.browser, timing:capture.timing, qaFrames:capture.qaFrames, qaFile:path.basename(qaPath), qaSha256:await hashPath(qaPath)};

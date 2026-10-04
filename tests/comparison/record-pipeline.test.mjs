@@ -197,7 +197,7 @@ test('capture QA proof keeps the exact ffprobe, timing, decode, and screenshot e
     probe,
     timing,
     decoded:true,
-    browser:{mode:'playwright-launch',executable:'chrome.exe',viewport:{width:1920,height:1080}},
+    browser:{mode:'playwright-launch',executable:'chrome.exe',headless:false,viewport:{width:1920,height:1080}},
     frames:[{relativePath:'qa/start.png',sha256:'a'.repeat(64)}]
   });
   assert.equal(artifact.status, 'passed');
@@ -209,8 +209,9 @@ test('capture QA proof keeps the exact ffprobe, timing, decode, and screenshot e
 
 test('CLI requires one source and an external output directory', () => {
   assert.deepEqual(parseArgs(['--formal-results','formal.json','--output-dir','C:\\Prj\\decision-lane\\videos']), {
-    formalResults:'formal.json', resultsDir:null, evidence:null, output:'C:\\Prj\\decision-lane\\videos', capture:false, browserPath:null, help:false
+    formalResults:'formal.json', resultsDir:null, evidence:null, output:'C:\\Prj\\decision-lane\\videos', capture:false, browserPath:null, headed:false, help:false
   });
+  assert.equal(parseArgs(['--formal-results','formal.json','--output-dir','videos','--capture','--headed']).headed,true);
   assert.throws(() => parseArgs(['--output','videos']), /exactly one/);
   assert.throws(() => parseArgs(['--formal-results','formal.json','--results-dir','results','--output','videos']), /exactly one/);
   assert.throws(() => assertExternalOutput(path.join(GAME_ROOT, 'videos')), /outside/);
