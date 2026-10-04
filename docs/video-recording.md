@@ -6,7 +6,7 @@
 
 8 traceは同じq3 seed 101 cohortです。q3は1回のSystemOne requestあたりaction/commit/dangerの3問、dispatch機会は別に16 physics ticksごとです。7モデルの同時推論映像ではなく、Colabごとのtraceを共通の実ブラウザー時計で1×再生します。
 
-Kaiなど6つのremote traceでは、`.game.json` と同じrunの `.runner.json` を読み、`runner.gameReport.sha256` が実際のgame report bytesと一致することを確認します。隣接するverification JSONに `weak_provenance_quarantined` または `aggregateEligible:false` があれば拒否し、runner/verification sidecarのSHA256もcapture manifestへ記録します。これはpublic sanitizeで原本とrunner記録のhashがずれたKai R1のようなtraceを録画cohortへ入れないためです。
+Kaiなど6つのremote traceでは、`.game.json` と対応する `.runner.json` を読み、`runner.gameReport.sha256` が実際のgame report bytesと一致することを確認します。runnerが記録した元filenameと公開report filenameが異なる場合も、実SHAが一致する場合だけ受理し、両名をcapture manifestへ記録します。隣接するverification JSONはmodel・game/benchmark commitを確認し、nested pinsと従来のtop-level fieldsの両方を読みます。`weak_provenance_quarantined` または `aggregateEligible:false` があれば拒否し、runner/verification sidecarのSHA256もcapture manifestへ記録します。これはpublic sanitizeで原本とrunner記録のhashがずれたKai R1のようなtraceを録画cohortへ入れないためです。
 
 ## 固定された検証gate
 

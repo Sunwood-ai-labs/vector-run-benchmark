@@ -95,9 +95,19 @@ async function writeJson(filePath, value) {
 
 async function writeRunnerSidecar(reportPath) {
   const bytes = await readFile(reportPath);
+  const report = JSON.parse(bytes.toString('utf8'));
   const runnerPath = reportPath.slice(0, -'.game.json'.length) + '.runner.json';
-  await writeJson(runnerPath, {gameReport:{file:path.basename(reportPath),sha256:createHash('sha256').update(bytes).digest('hex'),validJson:true}});
+  await writeJson(runnerPath, {model:{id:report.agent.model},gameReport:{file:path.basename(reportPath),sha256:createHash('sha256').update(bytes).digest('hex'),validJson:true}});
   return runnerPath;
+}
+
+async function writeVerificationSidecar(reportPath, id) {
+  const report = JSON.parse(await readFile(reportPath, 'utf8'));
+  const model = report.agent.model;
+  const verification = id === 'kai'
+    ? {model:{id:model},pins:{game:{commit:gameCommit},benchmark:{commit:benchmarkCommit}}}
+    : {model,gameCommit,benchmarkCommit};
+  await writeJson(path.join(path.dirname(reportPath), 'verification.json'), verification);
 }
 
 async function makeFormalFixture(root) {
@@ -107,7 +117,10 @@ async function makeFormalFixture(root) {
   for (const id of ids) {
     reportPaths[id] = path.join(root, 'results', id, `${id}-q3.game.json`);
     await writeJson(reportPaths[id], nativeReport(id));
-    if (!['rule','idle'].includes(id)) await writeRunnerSidecar(reportPaths[id]);
+    if (!['rule','idle'].includes(id)) {
+      await writeRunnerSidecar(reportPaths[id]);
+      await writeVerificationSidecar(reportPaths[id], id);
+    }
   }
   const formalResultsPath = path.join(root, 'handoffs', 'formal-results.json');
   await writeJson(formalResultsPath, formalManifest(reportPaths, evidencePath));
@@ -121,7 +134,7 @@ test('formal-results preflight loads one pinned native q3 report per target and 
   assert.deepEqual(bundle.reports.map(item => item.id), ids);
   assert.equal(bundle.questionCount, 3);
   assert.equal(bundle.evidencePath, fixture.evidencePath);
-  assert.equal(bundle.sources.length, 16);
+  assert.equal(bundle.sources.length, 22);
   for (const item of bundle.sources) {
     const expected = createHash('sha256').update(await readFile(item.filePath)).digest('hex');
     assert.equal(item.sha256, expected, item.filePath);
@@ -161,6 +174,23 @@ test('remote report provenance rejects runner SHA drift and explicit weak-proven
   await assert.rejects(loadFormalResultsBundle({formalResultsPath:cleanFixture.formalResultsPath, contract:fixtureContract()}), /weak_provenance_quarantined or aggregateEligible:false/);
 });
 
+test('remote verification provenance accepts nested Kai pins and rejects commit or model drift', async t => {
+  const root = await tempRoot(t);
+  const fixture = await makeFormalFixture(root);
+  const verificationPath = path.join(path.dirname(fixture.reportPaths.kai), 'verification.json');
+  const verification = JSON.parse(await readFile(verificationPath, 'utf8'));
+  assert.equal(verification.pins.game.commit,gameCommit);
+  assert.equal(verification.pins.benchmark.commit,benchmarkCommit);
+  const badPin = structuredClone(verification);
+  badPin.pins.game.commit = 'd'.repeat(40);
+  await writeJson(verificationPath,badPin);
+  await assert.rejects(loadFormalResultsBundle({formalResultsPath:fixture.formalResultsPath,contract:fixtureContract()}),/verification game commit/);
+  badPin.pins.game.commit = gameCommit;
+  badPin.model.id = 'other-model';
+  await writeJson(verificationPath,badPin);
+  await assert.rejects(loadFormalResultsBundle({formalResultsPath:fixture.formalResultsPath,contract:fixtureContract()}),/verification model/);
+});
+
 test('runner provenance accepts a published filename alias only when the exact report SHA matches', async t => {
   const root = await tempRoot(t);
   const fixture = await makeFormalFixture(root);
@@ -170,6 +200,9 @@ test('runner provenance accepts a published filename alias only when the exact r
   await writeJson(runnerPath, runner);
   const bundle = await loadFormalResultsBundle({formalResultsPath:fixture.formalResultsPath, contract:fixtureContract()});
   assert.equal(bundle.reports.length, 8);
+  const manifest = buildCaptureManifest(bundle,{outputDir:path.join(root,'videos'),captureRequested:false});
+  const provenance = manifest.sources.find(source=>source.kind==='runner_provenance'&&source.id==='kai');
+  assert.deepEqual(provenance.reportNameMapping,{originalRunnerFilename:'kai-q3-published.game.json',publishedFilename:'kai-q3.game.json'});
 });
 
 test('results-dir discovery skips .private reports but rejects any Sol-Reasoning game report', async t => {
@@ -180,7 +213,10 @@ test('results-dir discovery skips .private reports but rejects any Sol-Reasoning
   for (const id of ids) {
     const reportPath = path.join(resultsDir, id, `${id}.game.json`);
     await writeJson(reportPath, nativeReport(id));
-    if (!['rule','idle'].includes(id)) await writeRunnerSidecar(reportPath);
+    if (!['rule','idle'].includes(id)) {
+      await writeRunnerSidecar(reportPath);
+      await writeVerificationSidecar(reportPath,id);
+    }
   }
   await writeJson(path.join(resultsDir, '.private', 'duplicate.json'), nativeReport('kai'));
   const bundle = await discoverResultsDirBundle({resultsDir, contract:fixtureContract()});

@@ -89,27 +89,52 @@ function containsWeakProvenance(value) {
   return false;
 }
 
-async function validateRunnerProvenance(reportPath, id) {
+function verificationCommit(verification, kind) {
+  return verification?.pins?.[kind]?.commit
+    ?? verification?.[kind]?.commit
+    ?? verification?.[`${kind}Commit`]
+    ?? verification?.contract?.[`${kind}Commit`]
+    ?? null;
+}
+
+function verificationModel(value) {
+  if (typeof value === 'string') return value;
+  if (!isObject(value)) return null;
+  return value.id ?? value.model ?? value.name ?? null;
+}
+
+async function validateRunnerProvenance(reportPath, id, pins, expectedModel) {
   if (id === 'rule' || id === 'idle') return [];
   if (!reportPath.toLowerCase().endsWith('.game.json')) throw new Error(`${id}: native report must use the .game.json filename required by the runner provenance sidecar`);
   const runnerPath = reportPath.slice(0, -'.game.json'.length) + '.runner.json';
   const {value:runner} = await readJson(runnerPath, `${id} runner provenance`);
   if (!isObject(runner) || !isObject(runner.gameReport)) throw new Error(`${id}: runner sidecar has no gameReport provenance`);
   if (typeof runner.gameReport.file !== 'string' || !path.basename(runner.gameReport.file).toLowerCase().endsWith('.game.json')) throw new Error(`${id}: runner gameReport.file does not identify a native game report`);
+  if (verificationModel(runner.model) !== expectedModel) throw new Error(`${id}: runner sidecar model does not match the native report`);
   if (runner.gameReport.validJson !== true) throw new Error(`${id}: runner sidecar does not confirm a valid JSON game report`);
   const recordedSha = runner.gameReport.sha256;
   if (typeof recordedSha !== 'string' || !/^[0-9a-f]{64}$/i.test(recordedSha)) throw new Error(`${id}: runner sidecar has no valid gameReport.sha256`);
   const actualSha = await hashPath(reportPath);
   if (recordedSha.toLowerCase() !== actualSha) throw new Error(`${id}: runner.gameReport.sha256 does not match native report bytes; weak provenance is quarantined`);
 
-  const sources = [{kind:'runner_provenance', id, filePath:runnerPath, sha256:await hashPath(runnerPath)}];
+  const sources = [{
+    kind:'runner_provenance',
+    id,
+    filePath:runnerPath,
+    sha256:await hashPath(runnerPath),
+    reportNameMapping:{originalRunnerFilename:runner.gameReport.file, publishedFilename:path.basename(reportPath)}
+  }];
   const parent = path.dirname(reportPath);
   const verificationFiles = (await readdir(parent, {withFileTypes:true}))
     .filter(entry => entry.isFile() && /(?:^|[-.])verification.*\.json$/i.test(entry.name))
     .map(entry => path.join(parent, entry.name));
+  if (verificationFiles.length === 0) throw new Error(`${id}: runner verification sidecar is missing`);
   for (const verificationPath of verificationFiles) {
     const {value:verification} = await readJson(verificationPath, `${id} runner verification`);
     if (containsWeakProvenance(verification)) throw new Error(`${id}: ${verificationPath} declares weak_provenance_quarantined or aggregateEligible:false`);
+    if (verificationCommit(verification, 'game') !== pins.gameCommit) throw new Error(`${id}: verification game commit does not match the frozen measurement pin`);
+    if (verificationCommit(verification, 'benchmark') !== pins.benchmarkCommit) throw new Error(`${id}: verification benchmark commit does not match the frozen benchmark pin`);
+    if (verificationModel(verification.model) !== expectedModel) throw new Error(`${id}: verification model does not match the native report`);
     sources.push({kind:'runner_verification', id, filePath:verificationPath, sha256:await hashPath(verificationPath)});
   }
   return sources;
@@ -188,7 +213,7 @@ export async function loadFormalResultsBundle({formalResultsPath, evidenceOverri
   for (const source of reportPaths) {
     const {value:report} = await readJson(source.filePath, `${source.id} native report`);
     validateNativeReport(report, source.id, contract, pins, 3);
-    sources.push(...await validateRunnerProvenance(source.filePath, source.id));
+    sources.push(...await validateRunnerProvenance(source.filePath, source.id, pins, report.agent?.model));
     loadedReports.push({id:source.id, report, filePath:source.filePath, questionCount:3});
     sources.push({kind:'native_report', id:source.id, filePath:source.filePath, sha256:await hashPath(source.filePath)});
   }
@@ -226,7 +251,7 @@ export async function discoverResultsDirBundle({resultsDir, evidencePath = null,
     const questionCount = value.variant?.questionCount;
     if (![3, 64].includes(questionCount)) throw new Error(`${id}: native report questionCount must be 3 or 64`);
     validateNativeReport(value, id, contract, pins, questionCount);
-    reports.push({id, report:value, filePath, questionCount, provenanceSources:await validateRunnerProvenance(filePath, id)});
+    reports.push({id, report:value, filePath, questionCount, provenanceSources:await validateRunnerProvenance(filePath, id, pins, value.agent?.model)});
   }
   if (!reports.length) throw new Error(`no native ${NATIVE_REPORT_SCHEMA} reports found under ${root}`);
   const questionCounts = new Set(reports.map(item => item.questionCount));
@@ -255,7 +280,13 @@ export function buildCaptureManifest(bundle, {outputDir, captureRequested}) {
     createdAt:new Date().toISOString(),
     pins:{gameCommit:bundle.pins.gameCommit, sourceDigest:bundle.pins.sourceDigest, benchmarkCommit:bundle.pins.benchmarkCommit},
     cohort:{schema:NATIVE_REPORT_SCHEMA, questionCount:bundle.questionCount, runIds:bundle.reports.map(item => item.id)},
-    sources:bundle.sources.map(source => ({kind:source.kind, id:source.id, relativePath:relativeSourcePath(bundle, source.filePath), sha256:source.sha256})),
+    sources:bundle.sources.map(source => ({
+      kind:source.kind,
+      id:source.id,
+      relativePath:relativeSourcePath(bundle, source.filePath),
+      sha256:source.sha256,
+      ...(source.reportNameMapping ? {reportNameMapping:source.reportNameMapping} : {})
+    })),
     staticSolReasoningTile:{id:'solReasoning', label:bundle.formal?.targets?.['sol-reasoning']?.label ?? '未測定: unavailable evidence', status:'not_measured', noReplay:true, noScore:true, score:null},
     recording:{requested:Boolean(captureRequested), status:captureRequested?'capture_pending':'preflight_only', performed:false, mode:'native trace replay at 1x browser time', durationSeconds:VIDEO_DURATION_SECONDS, terminalHoldSeconds:3, outputFile:null},
     outputDirectory:path.resolve(outputDir)
