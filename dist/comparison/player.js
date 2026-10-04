@@ -8,9 +8,17 @@ export const DECISION_QUESTION_KEYS = Object.freeze({
 });
 
 const ACTIONS = new Set(['wait', 'jump', 'release']);
-const REQUIRED_RUNS = Object.freeze(['kai', 'eos', 'sol', 'solReasoning', 'nox', 'lux', 'vega', 'rule', 'idle']);
-const MEASUREMENT_COMMIT = '717f02dc9852b88c253ace32f42fcb6d780ed0d3';
-const MEASUREMENT_SOURCE_DIGEST = 'd7f9de9c3aaf0e22669dd54e916f9a854ea33b2339f83c183438f4c93be5357a';
+export const REQUIRED_RUNS = Object.freeze(['kai', 'eos', 'sol', 'nox', 'lux', 'vega', 'rule', 'idle']);
+export const DISPLAY_ORDER = Object.freeze(['kai', 'eos', 'sol', 'solReasoning', 'nox', 'lux', 'vega', 'rule', 'idle']);
+export const MEASUREMENT_COMMIT = '717f02dc9852b88c253ace32f42fcb6d780ed0d3';
+export const MEASUREMENT_SOURCE_DIGEST = 'd7f9de9c3aaf0e22669dd54e916f9a854ea33b2339f83c183438f4c93be5357a';
+export const BENCHMARK_COMMIT = 'b2e8fcbbf4b4f68931e4f9bbfbd434023348d3f0';
+export const REASONING_EVIDENCE = Object.freeze({
+  attemptId: '20261005-l4-717f02-b2e8fc',
+  model: 'vllm-sr/Decision-2.0-Sol-2B-Reasoning',
+  modelRevision: 'ace3ae7032a4f96ffe6be778b9a72e36b68d6e29',
+  benchmarkCommit: BENCHMARK_COMMIT
+});
 const ownKeys = value => value && typeof value === 'object' && !Array.isArray(value) ? Object.keys(value).sort() : [];
 const exactKeys = (value, keys) => JSON.stringify(ownKeys(value)) === JSON.stringify([...keys].sort());
 const finiteNumber = value => typeof value === 'number' && Number.isFinite(value);
@@ -155,15 +163,30 @@ export function validateDecision20Turn(request, rawResponse) {
   return {valid: errors.length === 0, errors, action: errors.length === 0 ? action.choice : null, questionCount};
 }
 
-function comparisonId(report) {
+export function comparisonId(report) {
   if (report?.agent?.kind === 'rule') return 'rule';
   if (report?.agent?.kind === 'idle') return 'idle';
   if (report?.agent?.kind !== 'remote') return null;
   const model = String(report.agent.model ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
-  return ({kai:'kai',eos:'eos',sol:'sol',solreasoning:'solReasoning',nox:'nox',lux:'lux',vega:'vega'})[model] ?? null;
+  return ({
+    kai:'kai',
+    vllmsrdecision20kai06b:'kai',
+    eos:'eos',
+    vllmsrdecision20eos08b:'eos',
+    sol:'sol',
+    vllmsrdecision20sol2b:'sol',
+    solreasoning:'solReasoning',
+    vllmsrdecision20sol2breasoning:'solReasoning',
+    nox:'nox',
+    vllmsrdecision20nox4b:'nox',
+    lux:'lux',
+    vllmsrdecision20lux9b:'lux',
+    vega:'vega',
+    vllmsrdecision20vega27b:'vega'
+  })[model] ?? null;
 }
 
-function gpuLabel(report) {
+export function gpuLabel(report) {
   const hardware = report?.hardware ?? report?.metadata?.hardware;
   const value = hardware?.gpuAlias ?? hardware?.gpuName ?? hardware?.gpu ?? hardware?.device ?? hardware?.name ?? null;
   return typeof value === 'string' && value.trim() ? value.trim() : null;
@@ -171,6 +194,40 @@ function gpuLabel(report) {
 
 function reportSeed101Run(report) {
   return Array.isArray(report?.runs) ? report.runs.find(run => run?.seed === 101) : null;
+}
+
+/** Validate the pinned Sol-Reasoning access failure used by the static ninth tile. */
+export function validateReasoningUnavailableEvidence(verification) {
+  const errors = [];
+  const require = (condition, message) => { if (!condition) errors.push(message); };
+  require(verification?.schemaVersion === 1, 'Sol-Reasoning unavailable evidence must use verification schemaVersion 1');
+  require(verification?.attemptId === REASONING_EVIDENCE.attemptId, 'Sol-Reasoning unavailable evidence attemptId is not the pinned verification');
+  require(verification?.status === 'model_access_blocked', 'Sol-Reasoning status must be model_access_blocked');
+  require(verification?.gameMeasurementStatus === 'not_measured', 'Sol-Reasoning game measurement must remain not_measured');
+  require(verification?.model === REASONING_EVIDENCE.model, 'Sol-Reasoning model identifier differs from the pinned target');
+  require(verification?.modelRevision === REASONING_EVIDENCE.modelRevision, 'Sol-Reasoning model revision differs from the pinned target');
+  require(verification?.game?.origin === 'https://github.com/Sunwood-ai-labs/vector-run-benchmark' && verification?.game?.commit === MEASUREMENT_COMMIT && verification?.game?.cleanHeadGate === 'passed', 'Sol-Reasoning evidence game provenance does not match the frozen measurement commit');
+  require(verification?.benchmark?.origin === 'https://github.com/Sunwood-ai-labs/vector-run-decision-colab' && verification?.benchmark?.commit === REASONING_EVIDENCE.benchmarkCommit && verification?.benchmark?.cleanHeadGate === 'passed', 'Sol-Reasoning evidence benchmark provenance does not match the pinned benchmark');
+  require(verification?.modelLoad?.runnerStatus === 'model_access_blocked', 'Sol-Reasoning model load must be model_access_blocked');
+  require(verification?.modelLoad?.systemOneCalls === 0, 'Sol-Reasoning evidence must show zero SystemOne calls');
+  require(verification?.modelLoad?.neuralForwardCalls === 0, 'Sol-Reasoning evidence must show zero neural forwards');
+  require(verification?.modelLoad?.unauthenticatedRevisionApiHttpStatus === 401, 'Sol-Reasoning evidence must show the pinned revision HTTP 401');
+  require(verification?.modelLoad?.localPinnedSnapshotFound === false, 'Sol-Reasoning local pinned snapshot must be absent');
+  require(verification?.modelLoad?.hfTokenEnvironmentPresent === false && verification?.modelLoad?.hfHubTokenEnvironmentPresent === false, 'Sol-Reasoning evidence must not depend on an unreported local HF token');
+  for (const key of ['runtimeReused', 'weightsCached', 'priorModelLoaded', 'priorSystemOneCall', 'priorInference', 'priorPrototypeGameRun']) {
+    require(verification?.runtimeHistory?.[key] === false, `Sol-Reasoning evidence runtimeHistory.${key} must be false`);
+  }
+  require(Array.isArray(verification?.series), 'Sol-Reasoning verification series are missing');
+  for (const questions of [3, 64]) {
+    const series = verification?.series?.find(item => item?.questions === questions);
+    require(Boolean(series), `Sol-Reasoning evidence q${questions} series is missing`);
+    if (series) {
+      require(series.runnerStatus === 'model_access_blocked' && series.gameFileProduced === false, `Sol-Reasoning q${questions} must remain unavailable without a game run`);
+      require(Array.isArray(series.seeds) && series.seeds.includes(101), `Sol-Reasoning q${questions} evidence must include seed 101`);
+    }
+  }
+  require(verification?.sanitization?.credentialsAndSessionIdentifiers === 'absent' && verification?.sanitization?.runnerJsonParse === 'passed' && verification?.sanitization?.sensitivePatternScan === 'passed', 'Sol-Reasoning verification sanitization gates must pass');
+  return {valid:errors.length === 0, errors};
 }
 
 function validateInputLogs(run, errors, id) {
@@ -429,14 +486,16 @@ function validateCliRun(report, run, id, errors) {
   validateDecisionRows(report, run, errors, id, 3600);
 }
 
-/** Validate nine native vector-run-decision-bench/v1 CLI reports; no video result schema is introduced. */
-export function validateComparisonGate(reports) {
+/** Validate eight native CLI reports and the separately pinned unavailable-target evidence. */
+export function validateComparisonGate(reports, reasoningVerification) {
   const errors = [];
   const require = (condition, message) => { if (!condition) errors.push(message); };
-  require(Array.isArray(reports) && reports.length === REQUIRED_RUNS.length, 'exactly nine native CLI reports are required');
-  if (!Array.isArray(reports)) return {valid:false, errors, questionCount:null};
+  require(Array.isArray(reports) && reports.length === REQUIRED_RUNS.length, 'exactly eight native CLI reports are required; Sol-Reasoning uses separate unavailable evidence');
+  const reasoningCheck = validateReasoningUnavailableEvidence(reasoningVerification);
+  for (const message of reasoningCheck.errors) errors.push(`Sol-Reasoning unavailable evidence: ${message}`);
+  if (!Array.isArray(reports)) return {valid:false, errors, questionCount:null, reasoningUnavailable:reasoningCheck.valid};
   const ids = reports.map(comparisonId);
-  require(ids.every(Boolean) && new Set(ids).size === REQUIRED_RUNS.length && REQUIRED_RUNS.every(id => ids.includes(id)), 'reports must contain Kai, Eos, Sol, SolReasoning, Nox, Lux, Vega, rule, and idle');
+  require(ids.every(Boolean) && new Set(ids).size === REQUIRED_RUNS.length && REQUIRED_RUNS.every(id => ids.includes(id)), 'reports must contain Kai, Eos, Sol, Nox, Lux, Vega, rule, and idle; Sol-Reasoning must not have a game report');
   const questionCounts = new Set();
   const sourceIds = new Set();
   for (let index = 0; index < reports.length; index++) {
@@ -463,9 +522,9 @@ export function validateComparisonGate(reports) {
     require(Boolean(run), `${id} report has no seed-101 run`);
     if (run) validateCliRun(report, run, id, errors);
   }
-  require(sourceIds.size === 1, 'all nine reports must use the same game commit and source digest');
-  require(questionCounts.size === 1, 'q3 and q64 reports cannot be mixed in one nine-tile cohort');
-  return {valid:errors.length === 0, errors, questionCount:questionCounts.size === 1 ? [...questionCounts][0] : null};
+  require(sourceIds.size === 1, 'all eight reports must use the same game commit and source digest');
+  require(questionCounts.size === 1, 'q3 and q64 reports cannot be mixed in one eight-trace cohort');
+  return {valid:errors.length === 0, errors, questionCount:questionCounts.size === 1 ? [...questionCounts][0] : null, reasoningUnavailable:reasoningCheck.valid};
 }
 
 function visibleStateFromEngine(engine) {
@@ -548,7 +607,7 @@ export function buildComparisonReplayRecord(run) {
   return {valid:errors.length === 0, errors, record:errors.length === 0 ? record : null, distanceMetres:engine.distance / 10};
 }
 
-const replayRuntime = {status:'waiting', error:null, startedAt:null, startSpreadMs:null, frameJitterMs:[]};
+const replayRuntime = {status:'waiting', error:null, startedAt:null, startedAtWallClockMs:null, completedAt:null, elapsedMs:null, startSpreadMs:null, maxFrameGapMs:null, frameJitterMs:[]};
 
 function gameCaptureCss() {
   return `html,body{width:100%;height:100%;margin:0!important;overflow:hidden!important;background:#131f2b!important}.shell{width:100%!important;height:100%!important;max-width:none!important;margin:0!important;padding:0!important}.shell>header,.workspace>aside,.play-heading,.scorebar,.controls,.input-help,.result-banner,.history,.protocol,.shell>footer{display:none!important}.workspace{display:block!important;width:100%!important;height:100%!important;margin:0!important}.play-column{display:block!important;width:100%!important;height:100%!important;padding:0!important}.arena{position:fixed!important;inset:0!important;width:100vw!important;height:100vh!important;border:0!important;border-radius:0!important;box-shadow:none!important}.arena canvas{display:block!important;width:100%!important;height:100%!important;aspect-ratio:auto!important}.arena .overlay{display:none!important}.arena-caption{left:10px!important;right:10px!important;bottom:8px!important}`;
@@ -589,6 +648,39 @@ function makeTile(run, index, questionCount, root) {
   return {run, tile, frame, status};
 }
 
+function makeReasoningUnavailableTile(verification, root) {
+  const tile = document.createElement('article');
+  tile.className = 'tile unavailable-tile';
+  tile.dataset.runId = 'solReasoning';
+  tile.dataset.status = 'unmeasured';
+  const head = document.createElement('div');
+  head.className = 'tile-head';
+  const name = document.createElement('span');
+  name.className = 'tile-name';
+  name.textContent = 'Sol Reasoning';
+  const meta = document.createElement('span');
+  meta.className = 'tile-meta';
+  meta.textContent = 'MODEL ACCESS BLOCKED';
+  const status = document.createElement('span');
+  status.className = 'tile-status';
+  status.textContent = 'UNMEASURED';
+  head.append(name, meta, status);
+  const body = document.createElement('div');
+  body.className = 'unavailable-body';
+  const label = document.createElement('strong');
+  label.className = 'unavailable-label';
+  label.textContent = '未測定:配布元401';
+  const detail = document.createElement('p');
+  detail.textContent = `Pinned model revision HTTP ${verification.modelLoad.unauthenticatedRevisionApiHttpStatus}`;
+  const evidence = document.createElement('p');
+  evidence.className = 'unavailable-evidence';
+  evidence.textContent = `model_access_blocked · 0 neural forwards · cacheなし`;
+  body.append(label, detail, evidence);
+  tile.append(head, body);
+  root.append(tile);
+  return tile;
+}
+
 async function beginTileReplay(entry) {
   const frame = entry.frame;
   const doc = frame.contentDocument;
@@ -612,14 +704,14 @@ async function beginTileReplay(entry) {
   throw new Error(`${entry.run.id}: canonical app did not enter offline replay`);
 }
 
-export async function playComparison(reports) {
-  const gateCheck = validateComparisonGate(reports);
-  if (!gateCheck.valid) throw new Error(`native CLI reports failed: ${gateCheck.errors.join(' | ')}`);
+export async function playComparison(reports, reasoningVerification) {
+  const gateCheck = validateComparisonGate(reports, reasoningVerification);
+  if (!gateCheck.valid) throw new Error(`native CLI reports or unavailable evidence failed: ${gateCheck.errors.join(' | ')}`);
   const questionCount = gateCheck.questionCount;
   const replays = reports.map(report => {
     const run = reportSeed101Run(report);
     const id = comparisonId(report);
-    const displayName = id === 'solReasoning' ? 'Sol Reasoning' : id === 'rule' || id === 'idle' ? id : id[0].toUpperCase() + id.slice(1);
+    const displayName = id === 'rule' || id === 'idle' ? id : id[0].toUpperCase() + id.slice(1);
     const gpuAlias = gpuLabel(report);
     const replay = buildComparisonReplayRecord(run);
     return {...run, id, displayName, gpuAlias, ...replay, replayRecord:replay.record};
@@ -630,21 +722,42 @@ export async function playComparison(reports) {
   const comparison = document.querySelector('#comparison');
   const grid = document.querySelector('#grid');
   grid.replaceChildren();
-  const entries = replays.map((run, index) => makeTile(run, index, questionCount, grid));
+  const replayById = new Map(replays.map(run => [run.id, run]));
+  const entries = [];
+  for (const id of DISPLAY_ORDER) {
+    if (id === 'solReasoning') {
+      makeReasoningUnavailableTile(reasoningVerification, grid);
+      continue;
+    }
+    const run = replayById.get(id);
+    if (!run) throw new Error(`validated trace ${id} disappeared before replay`);
+    entries.push(makeTile(run, entries.length, questionCount, grid));
+  }
   gate.hidden = true;
   comparison.hidden = false;
   replayRuntime.status = 'loading';
   replayRuntime.error = null;
+  replayRuntime.startedAt = null;
+  replayRuntime.startedAtWallClockMs = null;
+  replayRuntime.completedAt = null;
+  replayRuntime.elapsedMs = null;
+  replayRuntime.startSpreadMs = null;
+  replayRuntime.maxFrameGapMs = null;
   replayRuntime.frameJitterMs.length = 0;
   const loadTimes = await Promise.all(entries.map(entry => new Promise((resolve, reject) => {
     entry.frame.addEventListener('load', () => resolve(entry), {once:true});
     entry.frame.addEventListener('error', () => reject(new Error(`${entry.run.id}: game renderer failed to load`)), {once:true});
   })));
   void loadTimes;
-  const dispatchStart = performance.now();
   const starts = await Promise.all(entries.map(beginTileReplay));
-  replayRuntime.startedAt = performance.now();
   replayRuntime.startSpreadMs = Math.max(...starts) - Math.min(...starts);
+  if (replayRuntime.startSpreadMs > 100) {
+    replayRuntime.status = 'invalid_start_spread';
+    replayRuntime.error = `tile replay start spread ${replayRuntime.startSpreadMs.toFixed(1)} ms exceeds 100 ms`;
+    throw new Error(replayRuntime.error);
+  }
+  replayRuntime.startedAt = performance.now();
+  replayRuntime.startedAtWallClockMs = Date.now() - (performance.now() - replayRuntime.startedAt);
   replayRuntime.status = 'playing';
   const elapsed = document.querySelector('#elapsed');
   const runState = document.querySelector('#run-state');
@@ -657,7 +770,7 @@ export async function playComparison(reports) {
     const update = now => {
       replayRuntime.frameJitterMs.push(now - lastFrame);
       lastFrame = now;
-      const seconds = Math.max(0, (now - dispatchStart) / 1000);
+      const seconds = Math.max(0, (now - replayRuntime.startedAt) / 1000);
       elapsed.textContent = `${seconds.toFixed(1)} s`;
       if (!terminalUiUpdated && seconds >= 30) {
         terminalUiUpdated = true;
@@ -667,10 +780,16 @@ export async function playComparison(reports) {
         }
       }
       if (seconds >= 33) {
-        replayRuntime.status = 'complete';
-        runState.textContent = 'COMPLETE';
+        replayRuntime.completedAt = now;
+        replayRuntime.elapsedMs = now - replayRuntime.startedAt;
+        replayRuntime.maxFrameGapMs = Math.max(0, ...replayRuntime.frameJitterMs);
+        const clockGapInvalid = replayRuntime.maxFrameGapMs > 100;
+        replayRuntime.status = clockGapInvalid ? 'invalid_clock_gap' : 'complete';
+        replayRuntime.error = clockGapInvalid ? `browser frame gap ${replayRuntime.maxFrameGapMs.toFixed(1)} ms exceeds 100 ms` : null;
+        runState.textContent = clockGapInvalid ? 'INVALID · CLOCK GAP' : 'COMPLETE';
+        integrity.textContent = clockGapInvalid ? replayRuntime.error : `q${questionCount}/request · max frame gap ${replayRuntime.maxFrameGapMs.toFixed(1)} ms`;
         for (const entry of entries) entry.status.textContent = entry.run.terminalStatus === 'time_limit' ? 'CENSORED' : 'FINISHED';
-        resolve({status:'complete',questionCount,startSpreadMs:replayRuntime.startSpreadMs,frameJitterMs:[...replayRuntime.frameJitterMs]});
+        resolve({status:replayRuntime.status,questionCount,startSpreadMs:replayRuntime.startSpreadMs,elapsedMs:replayRuntime.elapsedMs,maxFrameGapMs:replayRuntime.maxFrameGapMs,frameJitterMs:[...replayRuntime.frameJitterMs]});
         return;
       }
       requestAnimationFrame(update);
@@ -681,30 +800,52 @@ export async function playComparison(reports) {
 
 const gate = typeof document === 'undefined' ? null : document.querySelector('#gate');
 if (gate) {
-  window.vectorComparison = Object.freeze({validateDecision20Turn, validateVisibleState, validateComparisonGate, buildComparisonReplayRecord, playComparison, runtime:replayRuntime});
+  if (new URLSearchParams(window.location.search).get('capture') === '1') document.body.classList.add('capture-mode');
+  window.vectorComparison = Object.freeze({
+    REQUIRED_RUNS,
+    DISPLAY_ORDER,
+    MEASUREMENT_COMMIT,
+    MEASUREMENT_SOURCE_DIGEST,
+    BENCHMARK_COMMIT,
+    comparisonId,
+    gpuLabel,
+    validateDecision20Turn,
+    validateVisibleState,
+    validateReasoningUnavailableEvidence,
+    validateComparisonGate,
+    buildComparisonReplayRecord,
+    playComparison,
+    runtime:replayRuntime
+  });
   const reportFiles = document.querySelector('#report-files');
+  const reasoningEvidenceFile = document.querySelector('#reasoning-evidence-file');
   const startReplay = document.querySelector('#start-replay');
   const loadStatus = document.querySelector('#load-status');
   const errorList = document.querySelector('#preflight-errors');
-  if (reportFiles && startReplay && loadStatus) {
-    reportFiles.addEventListener('change', () => {
+  if (reportFiles && reasoningEvidenceFile && startReplay && loadStatus) {
+    const refreshSelectionStatus = () => {
       const count = reportFiles.files?.length ?? 0;
-      startReplay.disabled = count !== REQUIRED_RUNS.length;
-      loadStatus.textContent = count === REQUIRED_RUNS.length
-        ? '9本を選択しました。q cohort・trace・fingerprint・入力対応を検証できます。'
-        : `${count} / 9本。seed 101のnative CLI reportを9本選択してください。`;
+      const evidenceCount = reasoningEvidenceFile.files?.length ?? 0;
+      startReplay.disabled = count !== REQUIRED_RUNS.length || evidenceCount !== 1;
+      loadStatus.textContent = count === REQUIRED_RUNS.length && evidenceCount === 1
+        ? '8 traceとSol-Reasoning unavailable evidenceを選択しました。全gateを検証できます。'
+        : `${count} / 8 native trace、${evidenceCount} / 1 Sol-Reasoning verification.json。`;
       if (errorList) errorList.replaceChildren();
-    });
+    };
+    reportFiles.addEventListener('change', refreshSelectionStatus);
+    reasoningEvidenceFile.addEventListener('change', refreshSelectionStatus);
     startReplay.addEventListener('click', async () => {
       const files = Array.from(reportFiles.files ?? []);
-      if (files.length !== REQUIRED_RUNS.length) return;
+      const evidenceFiles = Array.from(reasoningEvidenceFile.files ?? []);
+      if (files.length !== REQUIRED_RUNS.length || evidenceFiles.length !== 1) return;
       startReplay.disabled = true;
-      loadStatus.textContent = '9本のnative CLI reportを検証しています…';
+      loadStatus.textContent = '8本のnative CLI reportとunavailable evidenceを検証しています…';
       if (errorList) errorList.replaceChildren();
       try {
         const reports = await Promise.all(files.map(async file => JSON.parse(await file.text())));
+        const reasoningVerification = JSON.parse(await evidenceFiles[0].text());
         const orderedReports = [...reports].sort((left, right) => REQUIRED_RUNS.indexOf(comparisonId(left)) - REQUIRED_RUNS.indexOf(comparisonId(right)));
-        const check = validateComparisonGate(orderedReports);
+        const check = validateComparisonGate(orderedReports, reasoningVerification);
         if (!check.valid) {
           replayRuntime.status = 'failed';
           replayRuntime.error = check.errors.join(' | ');
@@ -716,16 +857,18 @@ if (gate) {
             }
           }
           loadStatus.textContent = `事前gate不通過。修正したnative reportを選び直してください（${check.errors.length}件）。`;
-          startReplay.disabled = files.length !== REQUIRED_RUNS.length;
+          startReplay.disabled = false;
           return;
         }
-        await playComparison(orderedReports);
-        loadStatus.textContent = `q${check.questionCount}/request の9本を1×で再生しました。測定推論を同時実行した映像ではありません。`;
+        const replayResult = await playComparison(orderedReports, reasoningVerification);
+        loadStatus.textContent = replayResult.status === 'complete'
+          ? `q${check.questionCount}/request の8 traceを1×再生しました。Sol-Reasoningは配布元401による未測定カードです。`
+          : `録画gate不通過: ${replayRuntime.error ?? replayResult.status}`;
       } catch (error) {
         replayRuntime.status = 'failed';
         replayRuntime.error = String(error?.message ?? error);
         loadStatus.textContent = `再生gateで停止: ${replayRuntime.error}`;
-        startReplay.disabled = files.length !== REQUIRED_RUNS.length;
+        startReplay.disabled = false;
       }
     });
   }

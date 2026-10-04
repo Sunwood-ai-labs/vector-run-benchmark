@@ -1,0 +1,209 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {createHash} from 'node:crypto';
+import {mkdtemp, mkdir, readFile, rm, writeFile} from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import {
+  CAPTURE_MANIFEST_NAME,
+  GAME_ROOT,
+  assertExternalOutput,
+  buildCaptureQaArtifact,
+  buildCaptureManifest,
+  discoverResultsDirBundle,
+  loadFormalResultsBundle,
+  parseArgs,
+  validateCaptureQuality
+} from '../../scripts/record-comparison.mjs';
+
+const ids = ['kai','eos','sol','nox','lux','vega','rule','idle'];
+const gameCommit = 'a'.repeat(40);
+const sourceDigest = 'b'.repeat(64);
+const benchmarkCommit = 'c'.repeat(40);
+
+function fixtureContract() {
+  const modelIds = new Map(ids.filter(id => !['rule','idle'].includes(id)).map(id => [id, id]));
+  return {
+    REQUIRED_RUNS:ids,
+    DISPLAY_ORDER:['kai','eos','sol','solReasoning','nox','lux','vega','rule','idle'],
+    MEASUREMENT_COMMIT:gameCommit,
+    MEASUREMENT_SOURCE_DIGEST:sourceDigest,
+    BENCHMARK_COMMIT:benchmarkCommit,
+    comparisonId(report) {
+      if (report?.agent?.kind === 'rule' || report?.agent?.kind === 'idle') return report.agent.kind;
+      const model = String(report?.agent?.model ?? '').toLowerCase();
+      if (model === 'sol reasoning') return 'solReasoning';
+      return modelIds.get(model) ?? null;
+    },
+    validateReasoningUnavailableEvidence(evidence) {
+      const valid = evidence?.fixture === 'unavailable-evidence';
+      return {valid, errors:valid?[]:['fixture evidence mismatch']};
+    },
+    validateComparisonGate(reports, evidence) {
+      const valid = reports.length === 8 && evidence?.fixture === 'unavailable-evidence' && reports.every(report => report.variant?.questionCount === 3);
+      return {valid, questionCount:3, errors:valid?[]:['fixture native gate mismatch']};
+    },
+    buildComparisonReplayRecord(run) {
+      const valid = run?.seed === 101 && run?.fixtureReplay === true;
+      return {valid, record:valid?{seed:101}:null, errors:valid?[]:['fixture replay mismatch']};
+    }
+  };
+}
+
+async function tempRoot(t) {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'vr-capture-test-'));
+  t.after(async () => rm(directory, {recursive:true, force:true}));
+  return directory;
+}
+
+function nativeReport(id) {
+  const control = id === 'rule' || id === 'idle';
+  return {
+    schema:'vector-run-decision-bench/v1',
+    game:{repo:'https://github.com/Sunwood-ai-labs/vector-run-benchmark', commit:gameCommit, sourceDigest},
+    variant:{questionCount:3, systemOneQuestionCount:3},
+    agent:{kind:control?id:'remote', model:control?id:id},
+    runs:[{seed:101, fixtureReplay:true}]
+  };
+}
+
+function formalManifest(reportPaths, evidencePath) {
+  const targets = {};
+  for (const id of ids) {
+    targets[id] = {
+      status:id === 'rule' || id === 'idle' ? 'control_trace_available' : 'measured_trace_available',
+      q3Paths:[reportPaths[id]]
+    };
+  }
+  targets['sol-reasoning'] = {
+    status:'model_access_blocked',
+    replay:false,
+    evidence:evidencePath,
+    label:'未測定: 配布元401'
+  };
+  return {gameCommit, benchmarkCommit, targets};
+}
+
+async function writeJson(filePath, value) {
+  await mkdir(path.dirname(filePath), {recursive:true});
+  await writeFile(filePath, `${JSON.stringify(value)}\n`, 'utf8');
+}
+
+async function makeFormalFixture(root) {
+  const evidencePath = path.join(root, 'results', 'sol-reasoning', 'verification.json');
+  await writeJson(evidencePath, {fixture:'unavailable-evidence'});
+  const reportPaths = {};
+  for (const id of ids) {
+    reportPaths[id] = path.join(root, 'results', id, `${id}-q3.json`);
+    await writeJson(reportPaths[id], nativeReport(id));
+  }
+  const formalResultsPath = path.join(root, 'handoffs', 'formal-results.json');
+  await writeJson(formalResultsPath, formalManifest(reportPaths, evidencePath));
+  return {formalResultsPath, evidencePath, reportPaths};
+}
+
+test('formal-results preflight loads one pinned native q3 report per target and hashes the exact source files', async t => {
+  const root = await tempRoot(t);
+  const fixture = await makeFormalFixture(root);
+  const bundle = await loadFormalResultsBundle({formalResultsPath:fixture.formalResultsPath, contract:fixtureContract()});
+  assert.deepEqual(bundle.reports.map(item => item.id), ids);
+  assert.equal(bundle.questionCount, 3);
+  assert.equal(bundle.evidencePath, fixture.evidencePath);
+  assert.equal(bundle.sources.length, 10);
+  for (const item of bundle.sources) {
+    const expected = createHash('sha256').update(await readFile(item.filePath)).digest('hex');
+    assert.equal(item.sha256, expected, item.filePath);
+  }
+});
+
+test('formal-results refuses pin drift, duplicate/missing q3 paths, and a Sol-Reasoning game path', async t => {
+  const root = await tempRoot(t);
+  const fixture = await makeFormalFixture(root);
+  const contract = fixtureContract();
+  const original = JSON.parse(await readFile(fixture.formalResultsPath, 'utf8'));
+  await writeJson(fixture.formalResultsPath, {...original, gameCommit:'d'.repeat(40)});
+  await assert.rejects(loadFormalResultsBundle({formalResultsPath:fixture.formalResultsPath, contract}), /gameCommit/);
+  const pinCorrect = {...original, targets:{...original.targets}};
+  pinCorrect.targets.kai = {...pinCorrect.targets.kai, q3Paths:[fixture.reportPaths.kai, fixture.reportPaths.kai]};
+  await writeJson(fixture.formalResultsPath, pinCorrect);
+  await assert.rejects(loadFormalResultsBundle({formalResultsPath:fixture.formalResultsPath, contract}), /exactly one q3Paths/);
+  pinCorrect.targets.kai = {...pinCorrect.targets.kai, q3Paths:[fixture.reportPaths.kai]};
+  delete pinCorrect.targets['sol-reasoning'].replay;
+  pinCorrect.targets['sol-reasoning'].q3Paths = [fixture.reportPaths.sol];
+  await writeJson(fixture.formalResultsPath, pinCorrect);
+  await assert.rejects(loadFormalResultsBundle({formalResultsPath:fixture.formalResultsPath, contract}), /Sol-Reasoning target/);
+});
+
+test('results-dir discovery skips .private reports but rejects any Sol-Reasoning game report', async t => {
+  const root = await tempRoot(t);
+  const resultsDir = path.join(root, 'results');
+  const evidencePath = path.join(resultsDir, 'sol-reasoning', 'verification.json');
+  await writeJson(evidencePath, {fixture:'unavailable-evidence'});
+  for (const id of ids) await writeJson(path.join(resultsDir, id, `${id}.json`), nativeReport(id));
+  await writeJson(path.join(resultsDir, '.private', 'duplicate.json'), nativeReport('kai'));
+  const bundle = await discoverResultsDirBundle({resultsDir, contract:fixtureContract()});
+  assert.deepEqual(bundle.reports.map(item => item.id), ids);
+  const forbidden = nativeReport('sol reasoning');
+  await writeJson(path.join(resultsDir, 'sol-reasoning', 'game.json'), forbidden);
+  await assert.rejects(discoverResultsDirBundle({resultsDir, contract:fixtureContract()}), /Sol-Reasoning game report is forbidden/);
+});
+
+test('capture manifest records relative paths, SHA256, and the static no-replay/no-score state', async t => {
+  const root = await tempRoot(t);
+  const fixture = await makeFormalFixture(root);
+  const bundle = await loadFormalResultsBundle({formalResultsPath:fixture.formalResultsPath, contract:fixtureContract()});
+  const manifest = buildCaptureManifest(bundle, {outputDir:path.join(root, 'videos'), captureRequested:false});
+  assert.equal(manifest.manifestKind, 'vector-run-comparison-capture-inputs');
+  assert.equal(manifest.cohort.schema, 'vector-run-decision-bench/v1');
+  assert.equal(manifest.recording.status, 'preflight_only');
+  assert.equal(manifest.recording.performed, false);
+  assert.equal(manifest.staticSolReasoningTile.noReplay, true);
+  assert.equal(manifest.staticSolReasoningTile.noScore, true);
+  assert.equal(manifest.staticSolReasoningTile.score, null);
+  assert.ok(manifest.sources.every(source => !path.isAbsolute(source.relativePath)));
+  const manifestPath = path.join(root, 'videos', CAPTURE_MANIFEST_NAME);
+  assert.equal(path.basename(manifestPath), CAPTURE_MANIFEST_NAME);
+});
+
+test('probe QA requires a decoded 1920x1080 33-second recording and clean realtime timing', () => {
+  const fixture = {
+    probe:{streams:[{codec_type:'video',codec_name:'h264',width:1920,height:1080,avg_frame_rate:'30/1',r_frame_rate:'30/1',nb_frames:'990'}],format:{duration:'33.000000'}},
+    decoded:true,
+    timing:{browserElapsedMs:33000,startSpreadMs:65,maxFrameGapMs:92}
+  };
+  assert.deepEqual(validateCaptureQuality(fixture).errors, []);
+  assert.equal(validateCaptureQuality({...fixture, timing:{...fixture.timing,maxFrameGapMs:100.1}}).valid, false);
+  assert.equal(validateCaptureQuality({...fixture, timing:{...fixture.timing,startSpreadMs:101}}).valid, false);
+  assert.equal(validateCaptureQuality({...fixture, decoded:false}).valid, false);
+  assert.equal(validateCaptureQuality({...fixture, probe:{...fixture.probe,format:{duration:'31.5'}}}).valid, false);
+  assert.equal(validateCaptureQuality({...fixture, probe:{streams:[{codec_type:'video',width:1280,height:720}],format:{duration:'33'}}}).valid, false);
+  assert.equal(validateCaptureQuality({...fixture, probe:{...fixture.probe,streams:[{...fixture.probe.streams[0],avg_frame_rate:'24/1'}]}}).valid, false);
+});
+
+test('capture QA proof keeps the exact ffprobe, timing, decode, and screenshot evidence', () => {
+  const probe = {streams:[{codec_type:'video',codec_name:'h264',width:1920,height:1080,avg_frame_rate:'30/1',nb_frames:'990'}],format:{duration:'33.000000'}};
+  const timing = {browserElapsedMs:33000,startSpreadMs:25,maxFrameGapMs:72};
+  const artifact = buildCaptureQaArtifact({
+    video:{file:'comparison.mp4',sha256:'f'.repeat(64),sizeBytes:100},
+    probe,
+    timing,
+    decoded:true,
+    browser:{mode:'playwright-launch',executable:'chrome.exe',viewport:{width:1920,height:1080}},
+    frames:[{relativePath:'qa/start.png',sha256:'a'.repeat(64)}]
+  });
+  assert.equal(artifact.status, 'passed');
+  assert.deepEqual(artifact.video.probe, probe);
+  assert.deepEqual(artifact.timing, timing);
+  assert.equal(artifact.fullDecode.passed, true);
+  assert.deepEqual(artifact.qaFrames[0], {relativePath:'qa/start.png',sha256:'a'.repeat(64)});
+});
+
+test('CLI requires one source and an external output directory', () => {
+  assert.deepEqual(parseArgs(['--formal-results','formal.json','--output-dir','C:\\Prj\\decision-lane\\videos']), {
+    formalResults:'formal.json', resultsDir:null, evidence:null, output:'C:\\Prj\\decision-lane\\videos', capture:false, browserPath:null, help:false
+  });
+  assert.throws(() => parseArgs(['--output','videos']), /exactly one/);
+  assert.throws(() => parseArgs(['--formal-results','formal.json','--results-dir','results','--output','videos']), /exactly one/);
+  assert.throws(() => assertExternalOutput(path.join(GAME_ROOT, 'videos')), /outside/);
+  assert.doesNotThrow(() => assertExternalOutput(path.join(os.tmpdir(), 'vector-run-videos')));
+});

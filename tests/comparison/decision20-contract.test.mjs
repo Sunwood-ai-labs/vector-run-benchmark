@@ -4,16 +4,33 @@ import {
   DECISION_BASE_QUESTION_KEYS,
   DECISION_PROBE_KEYS,
   DECISION_QUESTION_KEYS,
+  DISPLAY_ORDER,
+  REQUIRED_RUNS,
+  comparisonId,
   buildComparisonReplayRecord,
   validateDecision20Turn,
-  validateComparisonGate
+  validateComparisonGate as validateComparisonGateNative,
+  validateReasoningUnavailableEvidence
 } from '../../dist/comparison/player.js';
 import {Engine, VERSION, configHashFor, hash, ruleIdFor, speedAt} from '../../dist/engine.js';
 
-const MODELS = Object.freeze({kai:'Kai',eos:'Eos',sol:'Sol',solReasoning:'SolReasoning',nox:'Nox',lux:'Lux',vega:'Vega'});
+const MODELS = Object.freeze({kai:'Kai',eos:'Eos',sol:'Sol',nox:'Nox',lux:'Lux',vega:'Vega'});
 const MEASUREMENT_COMMIT = '717f02dc9852b88c253ace32f42fcb6d780ed0d3';
 const MEASUREMENT_SOURCE_DIGEST = 'd7f9de9c3aaf0e22669dd54e916f9a854ea33b2339f83c183438f4c93be5357a';
 const ACTION_INSTRUCTIONS = '画面は横800×縦360、地面はy=278。playerの固定boxはx=116,width=34,height=42。player.yは地面からの高さで上向きが正、vyも上向きが正。obstacles[].xは画面左端、width/heightはbox寸法です。この可視状態だけから次の操作を1つ選んでください。heldは維持されます。jump上限はstate.player.maxJumpsです（標準設定は2回）。2回目のjumpにはreleaseしてからjumpを再pressします。着地すると回数が戻ります。';
+
+test('native backend model IDs map from the exact canonical report model names',()=>{
+  const models=[
+    ['vllm-sr/Decision-2.0-Kai-0.6B','kai'],
+    ['vllm-sr/Decision-2.0-Eos-0.8B','eos'],
+    ['vllm-sr/Decision-2.0-Sol-2B','sol'],
+    ['vllm-sr/Decision-2.0-Nox-4B','nox'],
+    ['vllm-sr/Decision-2.0-Lux-9B','lux'],
+    ['vllm-sr/Decision-2.0-Vega-27B','vega'],
+    ['vllm-sr/Decision-2.0-Sol-2B-Reasoning','solReasoning']
+  ];
+  for(const [model,id] of models) assert.equal(comparisonId({agent:{kind:'remote',model}}),id,model);
+});
 
 function visibleAt(engine) {
   const obstacles = engine.course.items.map(obstacle => ({
@@ -168,6 +185,30 @@ function makeReport(id, questionCount=3, firstAction='wait') {
   };
 }
 
+function makeReasoningVerification() {
+  return {
+    schemaVersion:1,
+    attemptId:'20261005-l4-717f02-b2e8fc',
+    status:'model_access_blocked',
+    gameMeasurementStatus:'not_measured',
+    model:'vllm-sr/Decision-2.0-Sol-2B-Reasoning',
+    modelRevision:'ace3ae7032a4f96ffe6be778b9a72e36b68d6e29',
+    game:{origin:'https://github.com/Sunwood-ai-labs/vector-run-benchmark',commit:MEASUREMENT_COMMIT,cleanHeadGate:'passed'},
+    benchmark:{origin:'https://github.com/Sunwood-ai-labs/vector-run-decision-colab',commit:'b2e8fcbbf4b4f68931e4f9bbfbd434023348d3f0',cleanHeadGate:'passed'},
+    runtimeHistory:{runtimeReused:false,weightsCached:false,priorModelLoaded:false,priorSystemOneCall:false,priorInference:false,priorPrototypeGameRun:false},
+    modelLoad:{runnerStatus:'model_access_blocked',systemOneCalls:0,neuralForwardCalls:0,localPinnedSnapshotFound:false,unauthenticatedRevisionApiHttpStatus:401,hfTokenEnvironmentPresent:false,hfHubTokenEnvironmentPresent:false},
+    series:[
+      {file:'sol-reasoning-q3.runner.json',questions:3,seeds:[101,202,303,404,505],runnerStatus:'model_access_blocked',gameFileProduced:false},
+      {file:'sol-reasoning-q64.runner.json',questions:64,seeds:[101],runnerStatus:'model_access_blocked',gameFileProduced:false}
+    ],
+    sanitization:{credentialsAndSessionIdentifiers:'absent',runnerJsonParse:'passed',sensitivePatternScan:'passed'}
+  };
+}
+
+function validateComparisonGate(reports, evidence=makeReasoningVerification()) {
+  return validateComparisonGateNative(reports,evidence);
+}
+
 function makeReports(questionCount=3) {
   return [...Object.keys(MODELS),'rule','idle'].map(id=>makeReport(id,questionCount));
 }
@@ -242,6 +283,45 @@ test('native CLI reports with remote, rule, and idle decision rows pass as one h
   assert.equal(validateComparisonGate(makeReports(64)).valid,true);
 });
 
+test('Sol-Reasoning is a static unavailable target only with pinned 401, zero-forward, and no-cache evidence',()=>{
+  assert.deepEqual(REQUIRED_RUNS,['kai','eos','sol','nox','lux','vega','rule','idle']);
+  assert.deepEqual(DISPLAY_ORDER,['kai','eos','sol','solReasoning','nox','lux','vega','rule','idle']);
+  const evidence=makeReasoningVerification();
+  assert.equal(validateReasoningUnavailableEvidence(evidence).valid,true);
+  assert.equal(validateComparisonGate(makeReports(3),evidence).valid,true);
+
+  const wrong401=structuredClone(evidence);
+  wrong401.modelLoad.unauthenticatedRevisionApiHttpStatus=403;
+  assert.ok(validateReasoningUnavailableEvidence(wrong401).errors.some(error=>error.includes('HTTP 401')));
+
+  const forwarded=structuredClone(evidence);
+  forwarded.modelLoad.neuralForwardCalls=1;
+  assert.ok(validateReasoningUnavailableEvidence(forwarded).errors.some(error=>error.includes('zero neural forwards')));
+
+  const cached=structuredClone(evidence);
+  cached.runtimeHistory.weightsCached=true;
+  assert.ok(validateReasoningUnavailableEvidence(cached).errors.some(error=>error.includes('weightsCached')));
+
+  const wrongPin=structuredClone(evidence);
+  wrongPin.game.commit='edaa900890c4c5aef982389fc4f0b495d4afb818';
+  assert.ok(validateReasoningUnavailableEvidence(wrongPin).errors.some(error=>error.includes('frozen measurement commit')));
+
+  const fabricatedRun=structuredClone(evidence);
+  fabricatedRun.series[0].gameFileProduced=true;
+  assert.ok(validateReasoningUnavailableEvidence(fabricatedRun).errors.some(error=>error.includes('without a game run')));
+
+  const missingEvidence=validateComparisonGate(makeReports(3),null);
+  assert.equal(missingEvidence.valid,false);
+  assert.ok(missingEvidence.errors.some(error=>error.includes('Sol-Reasoning unavailable evidence')));
+
+  const unexpectedReport=makeReports(3);
+  const reasoningReport=structuredClone(unexpectedReport[0]);
+  reasoningReport.agent.model='vllm-sr/Decision-2.0-Sol-2B-Reasoning';
+  unexpectedReport.push(reasoningReport);
+  assert.ok(validateComparisonGate(unexpectedReport,evidence).errors.some(error=>error.includes('exactly eight native CLI reports')));
+  assert.ok(validateComparisonGate(unexpectedReport,evidence).errors.some(error=>error.includes('Sol-Reasoning must not have a game report')));
+});
+
 test('each report is pinned to the frozen measurement commit and source digest',()=>{
   const badCommit=makeReports(3);
   badCommit[2].game.commit='edaa900890c4c5aef982389fc4f0b495d4afb818';
@@ -284,9 +364,9 @@ test('skipped remote opportunities and local controls preserve actual CLI rows a
   remote.skips.push({tick:skipped.dispatchTick,decisionId:skipped.decisionId,reason:'request_outstanding'});
   const result=validateComparisonGate(reports);
   assert.equal(result.valid,true,JSON.stringify(result.errors));
-  assert.ok(reports[7].runs[0].decisions.length>0,'rule local decisions are retained');
-  assert.ok(reports[8].runs[0].decisions.every(row=>row.status==='idle_no_action'),'idle decision rows are retained');
-  assert.equal(reports[8].runs[0].skips.length,reports[8].runs[0].decisions.length);
+  assert.ok(reports[6].runs[0].decisions.length>0,'rule local decisions are retained');
+  assert.ok(reports[7].runs[0].decisions.every(row=>row.status==='idle_no_action'),'idle decision rows are retained');
+  assert.equal(reports[7].runs[0].skips.length,reports[7].runs[0].decisions.length);
 });
 
 test('decision, action, and input rows have bijective IDs with wait-only actions and physical input pairs',()=>{

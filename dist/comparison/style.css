@@ -82,3 +82,37 @@ footer { margin-top: 20px; padding-top: 12px; border-top: 1px solid var(--line);
   .tile-meta { display: none; }
   footer { font-size: 8px; }
 }
+
+.unavailable-tile { border-color: #78563a; background: linear-gradient(145deg, #1d2528, #171d23); }
+.unavailable-tile .tile-status { color: #ffc16f; }
+.unavailable-body { display: flex; min-height: 140px; aspect-ratio: 800 / 360; flex-direction: column; align-items: center; justify-content: center; gap: 9px; padding: 12px; text-align: center; background: radial-gradient(ellipse at center, #34291f, #181f24 72%); }
+.unavailable-label { color: #ffd89e; font-size: clamp(18px, 2.1vw, 30px); letter-spacing: .04em; }
+.unavailable-body p { margin: 0; color: #c2cbc7; font: 600 12px ui-monospace, monospace; }
+.unavailable-body .unavailable-evidence { color: #f0c78d; font-size: 10px; }
+
+body.capture-mode { width: 100vw; height: 100vh; overflow: hidden; }
+body.capture-mode .shell { width: 100%; max-width: none; min-height: 0; padding: 10px 14px 7px; }
+body.capture-mode .masthead { padding-bottom: 6px; }
+body.capture-mode .brand { gap: 8px; font-size: 12px; }
+body.capture-mode .brand-mark { width: 25px; height: 25px; border-radius: 6px; font-size: 15px; }
+body.capture-mode .brand small { margin-top: 2px; font-size: 7px; }
+body.capture-mode .protocol { gap: 12px; font-size: 9px; }
+body.capture-mode .title-row { gap: 14px; padding: 5px 0 3px; }
+body.capture-mode .eyebrow { margin-bottom: 2px; font-size: 8px; }
+body.capture-mode h1 { font-size: 22px; }
+body.capture-mode .disclosure { max-width: 500px; font-size: 10px; }
+body.capture-mode .cohort { margin: 0 0 4px; font-size: 9px; }
+body.capture-mode .timing-contract { max-width: none; margin: 0 0 5px; font-size: 9px; line-height: 1.25; }
+body.capture-mode .run-bar { max-width: 1600px; height: 22px; margin: 0 auto 5px; padding: 0 8px; font-size: 9px; }
+body.capture-mode .grid { max-width: 1600px; margin: 0 auto; gap: 6px; }
+body.capture-mode .tile { border-radius: 6px; }
+body.capture-mode .tile-head { height: 22px; padding: 0 7px; font-size: 9px; }
+body.capture-mode .tile-meta { font-size: 7px; }
+body.capture-mode .tile-result { min-height: 20px; padding: 0 7px; font-size: 8px; }
+body.capture-mode .late-reply-state { font-size: 7px; }
+body.capture-mode .footer-note { margin: 5px 0 0; font-size: 9px; }
+body.capture-mode footer { margin-top: 6px; padding-top: 5px; font-size: 7px; }
+body.capture-mode .unavailable-body { gap: 5px; padding: 8px; }
+body.capture-mode .unavailable-label { font-size: 21px; }
+body.capture-mode .unavailable-body p { font-size: 9px; }
+body.capture-mode .unavailable-body .unavailable-evidence { font-size: 8px; }
