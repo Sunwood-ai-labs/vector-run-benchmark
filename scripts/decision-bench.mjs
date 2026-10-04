@@ -221,7 +221,7 @@ async function readMetadata(file){if(!file)return{};const value=JSON.parse(await
 
 export async function sourceDigest(root=ROOT){
   const digest=createHash('sha256');
-  for(const relative of SOURCE_FILES){digest.update(relative);digest.update('\0');digest.update(await readFile(path.join(root,relative)));digest.update('\0');}
+  for(const relative of SOURCE_FILES){digest.update(relative);digest.update('\0');digest.update((await readFile(path.join(root,relative),'utf8')).replace(/\r\n/g,'\n'));digest.update('\0');}
   return digest.digest('hex');
 }
 

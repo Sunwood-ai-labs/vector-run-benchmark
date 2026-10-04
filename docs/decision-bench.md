@@ -22,3 +22,6 @@ report schemaは`vector-run-decision-bench/v1`です。主なtop-level fieldsは
 `decisions`は16 tickごとの各機会を記録し、`skips`は`request_outstanding`または`idle_baseline`を記録します。遅れて届いた正常回答は`late_answer_not_applied`としてraw本文とprobabilitiesを残し、`applicationTick`はnullです。欠落・不正回答は`invalid_response`、null actionとして記録し、releaseへ置き換えません。
 
 衝突runは既存`replayRecord`で照合します。`time_limit`はcensoredとして専用validatorでsnapshotと`finalSnapshotHash`を再計算し、collision/clearやsummarize対象にはしません。9本を検証するときは同じq3またはq64のreportだけを一度に渡してください。
+# OS間で一致するソース指紋
+
+`game.sourceDigest`は、各測定ソースのパス、NUL、UTF-8本文のCRLFをLFにそろえた文字列、NULを順に連結したSHA-256です。同じゲームcommitなら、Windowsの対照実験とLinuxのColab実測で指紋が一致します。コードの変更は引き続き検出します。実時計を使うCPUテストは直列で実行し、実ゲームの100ms中断判定は維持します。
