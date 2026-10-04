@@ -14,6 +14,7 @@ import {
   isTerminalPlaybackState,
   loadFormalResultsBundle,
   parseArgs,
+  playbackElapsedMs,
   validateBrowserTiming,
   validateCaptureQuality
 } from '../../scripts/record-comparison.mjs';
@@ -195,6 +196,11 @@ test('browser clock is gated independently before the encoded file exists', () =
   assert.deepEqual(validateBrowserTiming(timing),{valid:true,errors:[]});
   assert.equal(validateBrowserTiming({...timing,maxFrameGapMs:100.1}).valid,false);
   assert.equal(validateBrowserTiming({...timing,browserElapsedMs:32799}).valid,false);
+});
+
+test('clock duration uses the completion-frame browser timestamp, without polling-delay inflation', () => {
+  assert.equal(playbackElapsedMs({elapsedMs:33042},33287),33042);
+  assert.equal(playbackElapsedMs({},32998),32998);
 });
 
 test('capture QA proof keeps the exact ffprobe, timing, decode, and screenshot evidence', () => {

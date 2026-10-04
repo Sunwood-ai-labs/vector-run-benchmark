@@ -251,6 +251,10 @@ export function isTerminalPlaybackState(status) {
   return TERMINAL_PLAYBACK_STATES.includes(status);
 }
 
+export function playbackElapsedMs(result, pageObservedElapsedMs) {
+  return Number.isFinite(result?.elapsedMs) ? result.elapsedMs : pageObservedElapsedMs;
+}
+
 function parseFrameRate(value) {
   if (typeof value !== 'string') return Number(value);
   const [numerator, denominator] = value.split('/').map(Number);
@@ -463,7 +467,8 @@ export async function captureComparison(bundle, {outputDir, contract, browserPat
     if (finished.status !== 'complete' || finished.result?.status !== 'complete') throw new Error(`comparison playback failed: ${finished.error ?? finished.status}`);
     if (pageErrors.length) throw new Error(`browser page error: ${pageErrors.join(' | ')}`);
     const timing = {
-      browserElapsedMs:finished.pageElapsedMs,
+      browserElapsedMs:playbackElapsedMs(finished.result, finished.pageElapsedMs),
+      pageObservedElapsedMs:finished.pageElapsedMs,
       hostElapsedMs,
       startSpreadMs:finished.result.startSpreadMs,
       maxFrameGapMs:maxOf(finished.frameGaps),
