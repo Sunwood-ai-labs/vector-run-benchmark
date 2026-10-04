@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#0b1118">
+  <title>VECTOR RUN — Decision 2.0 realtime comparison</title>
+  <link rel="stylesheet" href="style.css">
+  <script type="module" src="player.js"></script>
+</head>
+<body>
+  <main class="shell">
+    <header class="masthead">
+      <div class="brand"><span class="brand-mark">V</span><span>VECTOR RUN <small>DECISION 2.0</small></span></div>
+      <div class="protocol"><b>SEED 101</b><span>120 Hz · 1×</span><span>jump-2/v1</span></div>
+    </header>
+    <section class="title-row" aria-labelledby="title">
+      <div><p class="eyebrow">REAL-TIME TRACE REPLAY</p><h1 id="title">9-run comparison</h1></div>
+      <p class="disclosure">各Colab推論traceを個別に1×再生します。9モデルの同時推論ではありません。</p>
+    </section>
+    <p class="cohort">Observation: <b>structured-visible-state-v1</b> · 2段ジャンプ · pixel-observation cohortとは別条件</p>
+    <p class="timing-contract"><b>Decision 2.0:</b> q3/request = action・commit・danger、q64/request = q3 + 61 probes。両系列とも16 ticksごとにdispatch（約133.3 ms）、1 request in flight、推論中も物理時計は120 Hzで継続。質問数はdispatch回数を制限しません。</p>
+    <section id="gate" class="gate" aria-live="polite">
+      <span class="gate-icon" aria-hidden="true">!</span>
+      <div>
+        <h2>正式録画の素材がまだありません</h2>
+        <p id="gate-message">resultsフォルダに、native CLI report（seed 101）の全9本の検証済みtraceが揃うまで再生しません。rule/idleへの代替やダミーtraceは使いません。</p>
+        <div class="report-loader">
+          <label for="report-files">native CLI report JSONを9本選択</label>
+          <input id="report-files" type="file" accept="application/json,.json" multiple>
+          <button id="start-replay" type="button" disabled>全traceを検証して1×再生</button>
+          <span id="load-status" role="status">q3またはq64のreportを9本選択してください。</span>
+        </div>
+        <ul id="gate-errors">
+          <li>Decision 2.0のraw request/responseをtrace内に保持</li>
+          <li>q3/q64を区別。q64 probesはtrue値を尋ねる61個の明示的boolean</li>
+          <li>日本語instructions・JSON visible state・raw probabilities・遅延replyを保持</li>
+          <li>initialState tick 0、frameSnapshots tick 1..finalTick、input tick N → applicationTick N+1を照合</li>
+          <li>decision/skipsのremote・rule・idle行をCLI reportのまま照合</li>
+          <li>seed 101 / 120 Hz / 1× / 30 s / jump-2 / structured-visible-state-v1</li>
+        </ul>
+      </div>
+    </section>
+    <section id="comparison" hidden>
+      <div class="run-bar"><span id="run-state">READY</span><span id="elapsed">00.00 s</span><span id="integrity">trace checks passed</span></div>
+      <div id="grid" class="grid" aria-label="9-run comparison grid"></div>
+      <p class="footer-note">Time limit 30 s; surviving runs are right-censored, not clears. Results remain visible while the common clock continues; final hold 3 s. Raw late replies remain in the trace.</p>
+    </section>
+    <footer><span>CANONICAL GAME · SUNWOOD-AI-LABS</span><span>VIDEO FILES BELONG IN THE COLAB REPOSITORY</span></footer>
+  </main>
+</body>
+</html>
