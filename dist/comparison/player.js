@@ -192,6 +192,11 @@ export function gpuLabel(report) {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
+export function replayDetectionStartSpread(detectedAtTimes) {
+  if (!Array.isArray(detectedAtTimes) || detectedAtTimes.length === 0 || detectedAtTimes.some(value => !Number.isFinite(value))) return NaN;
+  return Math.max(...detectedAtTimes) - Math.min(...detectedAtTimes);
+}
+
 function reportSeed101Run(report) {
   return Array.isArray(report?.runs) ? report.runs.find(run => run?.seed === 101) : null;
 }
@@ -695,10 +700,9 @@ async function beginTileReplay(entry) {
   const input = doc.querySelector('#importReplay');
   input.files = transfer.files;
   input.dispatchEvent(new frame.contentWindow.Event('change', {bubbles:true}));
-  const startedAt = performance.now();
-  const deadline = startedAt + 3000;
+  const deadline = performance.now() + 3000;
   while (performance.now() < deadline) {
-    if (doc.querySelector('#stateBadge')?.textContent === 'REPLAY') return startedAt;
+    if (doc.querySelector('#stateBadge')?.textContent === 'REPLAY') return performance.now();
     await new Promise(resolve => setTimeout(resolve, 10));
   }
   throw new Error(`${entry.run.id}: canonical app did not enter offline replay`);
@@ -750,7 +754,7 @@ export async function playComparison(reports, reasoningVerification) {
   })));
   void loadTimes;
   const starts = await Promise.all(entries.map(beginTileReplay));
-  replayRuntime.startSpreadMs = Math.max(...starts) - Math.min(...starts);
+  replayRuntime.startSpreadMs = replayDetectionStartSpread(starts);
   if (replayRuntime.startSpreadMs > 100) {
     replayRuntime.status = 'invalid_start_spread';
     replayRuntime.error = `tile replay start spread ${replayRuntime.startSpreadMs.toFixed(1)} ms exceeds 100 ms`;
@@ -809,6 +813,7 @@ if (gate) {
     BENCHMARK_COMMIT,
     comparisonId,
     gpuLabel,
+    replayDetectionStartSpread,
     validateDecision20Turn,
     validateVisibleState,
     validateReasoningUnavailableEvidence,

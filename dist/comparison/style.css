@@ -32,6 +32,7 @@ h1 { margin: 0; font-size: clamp(24px, 2vw, 34px); letter-spacing: -.03em; }
 .timing-contract { max-width: 1120px; margin: 0 0 16px; color: #c8d3d0; font-size: 11px; line-height: 1.55; }
 .timing-contract b { color: var(--lime); font-family: ui-monospace, monospace; }
 .gate { display: grid; grid-template-columns: 42px 1fr; gap: 14px; max-width: 900px; margin: 40px auto; padding: 28px; border: 1px solid #745439; border-radius: 16px; background: linear-gradient(135deg, #1c2428, #171d23); box-shadow: 0 24px 60px #0004; }
+.gate[hidden] { display: none !important; }
 .gate-icon { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 50%; background: #553e2b; color: #ffd7a2; font-size: 22px; font-weight: 800; }
 .gate h2 { margin: 1px 0 9px; font-size: 18px; }
 .gate p { margin: 0; color: #bdc8c5; font-size: 13px; line-height: 1.6; }

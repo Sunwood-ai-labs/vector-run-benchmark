@@ -6,6 +6,8 @@
 
 8 traceは同じq3 seed 101 cohortです。q3は1回のSystemOne requestあたりaction/commit/dangerの3問、dispatch機会は別に16 physics ticksごとです。7モデルの同時推論映像ではなく、Colabごとのtraceを共通の実ブラウザー時計で1×再生します。
 
+Kaiなど6つのremote traceでは、`.game.json` と同じrunの `.runner.json` を読み、`runner.gameReport.sha256` が実際のgame report bytesと一致することを確認します。隣接するverification JSONに `weak_provenance_quarantined` または `aggregateEligible:false` があれば拒否し、runner/verification sidecarのSHA256もcapture manifestへ記録します。これはpublic sanitizeで原本とrunner記録のhashがずれたKai R1のようなtraceを録画cohortへ入れないためです。
+
 ## 固定された検証gate
 
 すべてのreportはnative vector-run-decision-bench/v1 のまま読み、report間で同じ結果schemaへ変換しません。8 traceそれぞれについて、measurement commit 717f02dc9852b88c253ace32f42fcb6d780ed0d3、sourceDigest d7f9de9c3aaf0e22669dd54e916f9a854ea33b2339f83c183438f4c93be5357a、実agent、seed 101、q3、structured-visible-state-v1、120 Hz、jump-2、30秒horizon、tick 3600のright-censoring、raw request/response、raw probabilities、decision/action/inputの対応、tick 0 initialStateとtick 1..finalTick frame列を個別に検証します。
@@ -17,6 +19,8 @@ Sol-Reasoningの静的カードは、formal-results manifestに宣言されたve
 ## ソース先行の確認
 
 T3 previewの録画を使うときは preview_status の後に preview_open を行います。明示的にautomation host unavailableと分かった場合だけPlaywright Chromium fallbackを使い、その理由をhandoffへ記録します。録画ブラウザーはviewport 1920×1080、device scale factor 1です。
+
+Replay start spreadはinput change dispatch時刻ではなく、各game iframeのstate badgeが実際に`REPLAY`へ変わった時刻の最大差で計算します。録画前にcapture modeが有効、preflight gateが非表示、9枠がdisplay orderどおりに1920×1080 viewport内へ収まり、Sol-Reasoningにiframeがないことも検査します。
 
 録画scriptは最初に全8 traceとReasoning証拠を読み、全gateを通すまでブラウザーを開きません。--capture を付けない実行は検証済みsource SHA manifestだけを作ります。physics、game app、CLI、observerには変更を加えません。
 

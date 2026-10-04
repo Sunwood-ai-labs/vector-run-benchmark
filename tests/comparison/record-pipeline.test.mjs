@@ -15,6 +15,7 @@ import {
   loadFormalResultsBundle,
   parseArgs,
   playbackElapsedMs,
+  validateCaptureLayout,
   validateBrowserTiming,
   validateCaptureQuality
 } from '../../scripts/record-comparison.mjs';
@@ -92,13 +93,21 @@ async function writeJson(filePath, value) {
   await writeFile(filePath, `${JSON.stringify(value)}\n`, 'utf8');
 }
 
+async function writeRunnerSidecar(reportPath) {
+  const bytes = await readFile(reportPath);
+  const runnerPath = reportPath.slice(0, -'.game.json'.length) + '.runner.json';
+  await writeJson(runnerPath, {gameReport:{file:path.basename(reportPath),sha256:createHash('sha256').update(bytes).digest('hex'),validJson:true}});
+  return runnerPath;
+}
+
 async function makeFormalFixture(root) {
   const evidencePath = path.join(root, 'results', 'sol-reasoning', 'verification.json');
   await writeJson(evidencePath, {fixture:'unavailable-evidence'});
   const reportPaths = {};
   for (const id of ids) {
-    reportPaths[id] = path.join(root, 'results', id, `${id}-q3.json`);
+    reportPaths[id] = path.join(root, 'results', id, `${id}-q3.game.json`);
     await writeJson(reportPaths[id], nativeReport(id));
+    if (!['rule','idle'].includes(id)) await writeRunnerSidecar(reportPaths[id]);
   }
   const formalResultsPath = path.join(root, 'handoffs', 'formal-results.json');
   await writeJson(formalResultsPath, formalManifest(reportPaths, evidencePath));
@@ -112,7 +121,7 @@ test('formal-results preflight loads one pinned native q3 report per target and 
   assert.deepEqual(bundle.reports.map(item => item.id), ids);
   assert.equal(bundle.questionCount, 3);
   assert.equal(bundle.evidencePath, fixture.evidencePath);
-  assert.equal(bundle.sources.length, 10);
+  assert.equal(bundle.sources.length, 16);
   for (const item of bundle.sources) {
     const expected = createHash('sha256').update(await readFile(item.filePath)).digest('hex');
     assert.equal(item.sha256, expected, item.filePath);
@@ -137,12 +146,31 @@ test('formal-results refuses pin drift, duplicate/missing q3 paths, and a Sol-Re
   await assert.rejects(loadFormalResultsBundle({formalResultsPath:fixture.formalResultsPath, contract}), /Sol-Reasoning target/);
 });
 
+test('remote report provenance rejects runner SHA drift and explicit weak-provenance quarantine', async t => {
+  const root = await tempRoot(t);
+  const fixture = await makeFormalFixture(root);
+  const report = JSON.parse(await readFile(fixture.reportPaths.kai, 'utf8'));
+  await writeJson(fixture.reportPaths.kai, {...report, alteredAfterRunner:true});
+  await assert.rejects(loadFormalResultsBundle({formalResultsPath:fixture.formalResultsPath, contract:fixtureContract()}), /runner\.gameReport\.sha256 does not match native report bytes/);
+
+  const cleanRoot = await tempRoot(t);
+  const cleanFixture = await makeFormalFixture(cleanRoot);
+  await writeJson(path.join(path.dirname(cleanFixture.reportPaths.kai), 'verification.json'), {
+    privacyNormalizationProvenance:{status:'weak_provenance_quarantined',aggregateEligible:false}
+  });
+  await assert.rejects(loadFormalResultsBundle({formalResultsPath:cleanFixture.formalResultsPath, contract:fixtureContract()}), /weak_provenance_quarantined or aggregateEligible:false/);
+});
+
 test('results-dir discovery skips .private reports but rejects any Sol-Reasoning game report', async t => {
   const root = await tempRoot(t);
   const resultsDir = path.join(root, 'results');
   const evidencePath = path.join(resultsDir, 'sol-reasoning', 'verification.json');
   await writeJson(evidencePath, {fixture:'unavailable-evidence'});
-  for (const id of ids) await writeJson(path.join(resultsDir, id, `${id}.json`), nativeReport(id));
+  for (const id of ids) {
+    const reportPath = path.join(resultsDir, id, `${id}.game.json`);
+    await writeJson(reportPath, nativeReport(id));
+    if (!['rule','idle'].includes(id)) await writeRunnerSidecar(reportPath);
+  }
   await writeJson(path.join(resultsDir, '.private', 'duplicate.json'), nativeReport('kai'));
   const bundle = await discoverResultsDirBundle({resultsDir, contract:fixtureContract()});
   assert.deepEqual(bundle.reports.map(item => item.id), ids);
@@ -198,6 +226,16 @@ test('browser clock is gated independently before the encoded file exists', () =
   assert.equal(validateBrowserTiming({...timing,browserElapsedMs:32799}).valid,false);
 });
 
+test('recording layout gate requires all nine tiles and the static unavailable card in the viewport', () => {
+  const expected=['kai','eos','sol','solReasoning','nox','lux','vega','rule','idle'];
+  const layout={captureMode:true,gateVisible:false,comparisonVisible:true,tileIds:expected,reasoningHasIframe:false,viewportWidth:1920,viewportHeight:1080,scrollHeight:1080,tilesWithinViewport:true};
+  assert.deepEqual(validateCaptureLayout(layout,expected),{valid:true,errors:[]});
+  assert.equal(validateCaptureLayout({...layout,gateVisible:true},expected).valid,false);
+  assert.equal(validateCaptureLayout({...layout,tileIds:expected.slice(0,8)},expected).valid,false);
+  assert.equal(validateCaptureLayout({...layout,tilesWithinViewport:false},expected).valid,false);
+  assert.equal(validateCaptureLayout({...layout,reasoningHasIframe:true},expected).valid,false);
+});
+
 test('clock duration uses the completion-frame browser timestamp, without polling-delay inflation', () => {
   assert.equal(playbackElapsedMs({elapsedMs:33042},33287),33042);
   assert.equal(playbackElapsedMs({},32998),32998);
@@ -212,12 +250,16 @@ test('capture QA proof keeps the exact ffprobe, timing, decode, and screenshot e
     timing,
     decoded:true,
     browser:{mode:'playwright-launch',executable:'chrome.exe',headless:false,viewport:{width:1920,height:1080}},
-    frames:[{relativePath:'qa/start.png',sha256:'a'.repeat(64)}]
+    frames:[{relativePath:'qa/start.png',sha256:'a'.repeat(64)}],
+    layout:{captureMode:true,tilesWithinViewport:true},
+    sourceManifestSha256:'1'.repeat(64)
   });
-  assert.equal(artifact.status, 'passed');
+  assert.equal(artifact.status, 'automated_checks_passed_visual_review_pending');
   assert.deepEqual(artifact.video.probe, probe);
   assert.deepEqual(artifact.timing, timing);
   assert.equal(artifact.fullDecode.passed, true);
+  assert.equal(artifact.sourceManifestSha256,'1'.repeat(64));
+  assert.equal(artifact.visualQA.status,'pending');
   assert.deepEqual(artifact.qaFrames[0], {relativePath:'qa/start.png',sha256:'a'.repeat(64)});
 });
 

@@ -10,7 +10,8 @@ import {
   buildComparisonReplayRecord,
   validateDecision20Turn,
   validateComparisonGate as validateComparisonGateNative,
-  validateReasoningUnavailableEvidence
+  validateReasoningUnavailableEvidence,
+  replayDetectionStartSpread
 } from '../../dist/comparison/player.js';
 import {Engine, VERSION, configHashFor, hash, ruleIdFor, speedAt} from '../../dist/engine.js';
 
@@ -18,6 +19,11 @@ const MODELS = Object.freeze({kai:'Kai',eos:'Eos',sol:'Sol',nox:'Nox',lux:'Lux',
 const MEASUREMENT_COMMIT = '717f02dc9852b88c253ace32f42fcb6d780ed0d3';
 const MEASUREMENT_SOURCE_DIGEST = 'd7f9de9c3aaf0e22669dd54e916f9a854ea33b2339f83c183438f4c93be5357a';
 const ACTION_INSTRUCTIONS = '画面は横800×縦360、地面はy=278。playerの固定boxはx=116,width=34,height=42。player.yは地面からの高さで上向きが正、vyも上向きが正。obstacles[].xは画面左端、width/heightはbox寸法です。この可視状態だけから次の操作を1つ選んでください。heldは維持されます。jump上限はstate.player.maxJumpsです（標準設定は2回）。2回目のjumpにはreleaseしてからjumpを再pressします。着地すると回数が戻ります。';
+
+test('replay start spread uses timestamps when each iframe reports REPLAY',()=>{
+  assert.equal(replayDetectionStartSpread([100,137,109]),37);
+  assert.equal(Number.isNaN(replayDetectionStartSpread([100,NaN])),true);
+});
 
 test('native backend model IDs map from the exact canonical report model names',()=>{
   const models=[

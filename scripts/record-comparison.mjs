@@ -1,7 +1,7 @@
 import {createHash} from 'node:crypto';
 import {spawn} from 'node:child_process';
 import {createServer} from 'node:http';
-import {mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile} from 'node:fs/promises';
+import {mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, writeFile} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {fileURLToPath, pathToFileURL} from 'node:url';
@@ -78,6 +78,43 @@ async function hashPath(filePath) {
   return digestBytes(await readFile(filePath));
 }
 
+function containsWeakProvenance(value) {
+  if (Array.isArray(value)) return value.some(containsWeakProvenance);
+  if (!isObject(value)) return false;
+  for (const [key, item] of Object.entries(value)) {
+    if (key === 'status' && item === 'weak_provenance_quarantined') return true;
+    if (key === 'aggregateEligible' && item === false) return true;
+    if (containsWeakProvenance(item)) return true;
+  }
+  return false;
+}
+
+async function validateRunnerProvenance(reportPath, id) {
+  if (id === 'rule' || id === 'idle') return [];
+  if (!reportPath.toLowerCase().endsWith('.game.json')) throw new Error(`${id}: native report must use the .game.json filename required by the runner provenance sidecar`);
+  const runnerPath = reportPath.slice(0, -'.game.json'.length) + '.runner.json';
+  const {value:runner} = await readJson(runnerPath, `${id} runner provenance`);
+  if (!isObject(runner) || !isObject(runner.gameReport)) throw new Error(`${id}: runner sidecar has no gameReport provenance`);
+  if (typeof runner.gameReport.file !== 'string' || path.basename(runner.gameReport.file) !== path.basename(reportPath)) throw new Error(`${id}: runner gameReport.file does not identify the native report`);
+  if (runner.gameReport.validJson !== true) throw new Error(`${id}: runner sidecar does not confirm a valid JSON game report`);
+  const recordedSha = runner.gameReport.sha256;
+  if (typeof recordedSha !== 'string' || !/^[0-9a-f]{64}$/i.test(recordedSha)) throw new Error(`${id}: runner sidecar has no valid gameReport.sha256`);
+  const actualSha = await hashPath(reportPath);
+  if (recordedSha.toLowerCase() !== actualSha) throw new Error(`${id}: runner.gameReport.sha256 does not match native report bytes; weak provenance is quarantined`);
+
+  const sources = [{kind:'runner_provenance', id, filePath:runnerPath, sha256:await hashPath(runnerPath)}];
+  const parent = path.dirname(reportPath);
+  const verificationFiles = (await readdir(parent, {withFileTypes:true}))
+    .filter(entry => entry.isFile() && /(?:^|[-.])verification.*\.json$/i.test(entry.name))
+    .map(entry => path.join(parent, entry.name));
+  for (const verificationPath of verificationFiles) {
+    const {value:verification} = await readJson(verificationPath, `${id} runner verification`);
+    if (containsWeakProvenance(verification)) throw new Error(`${id}: ${verificationPath} declares weak_provenance_quarantined or aggregateEligible:false`);
+    sources.push({kind:'runner_verification', id, filePath:verificationPath, sha256:await hashPath(verificationPath)});
+  }
+  return sources;
+}
+
 function requireFormalPins(formal, contract, formalPath) {
   const pins = contractPins(contract);
   if (!isObject(formal)) throw new Error('formal-results manifest must be a JSON object');
@@ -151,6 +188,7 @@ export async function loadFormalResultsBundle({formalResultsPath, evidenceOverri
   for (const source of reportPaths) {
     const {value:report} = await readJson(source.filePath, `${source.id} native report`);
     validateNativeReport(report, source.id, contract, pins, 3);
+    sources.push(...await validateRunnerProvenance(source.filePath, source.id));
     loadedReports.push({id:source.id, report, filePath:source.filePath, questionCount:3});
     sources.push({kind:'native_report', id:source.id, filePath:source.filePath, sha256:await hashPath(source.filePath)});
   }
@@ -188,7 +226,7 @@ export async function discoverResultsDirBundle({resultsDir, evidencePath = null,
     const questionCount = value.variant?.questionCount;
     if (![3, 64].includes(questionCount)) throw new Error(`${id}: native report questionCount must be 3 or 64`);
     validateNativeReport(value, id, contract, pins, questionCount);
-    reports.push({id, report:value, filePath, questionCount});
+    reports.push({id, report:value, filePath, questionCount, provenanceSources:await validateRunnerProvenance(filePath, id)});
   }
   if (!reports.length) throw new Error(`no native ${NATIVE_REPORT_SCHEMA} reports found under ${root}`);
   const questionCounts = new Set(reports.map(item => item.questionCount));
@@ -197,7 +235,10 @@ export async function discoverResultsDirBundle({resultsDir, evidencePath = null,
   const {value:evidence} = await readJson(resolvedEvidence, 'Sol-Reasoning verification evidence');
   const validated = await validateBundle(reports, evidence, contract, pins);
   const sources = [];
-  for (const item of validated.reports) sources.push({kind:'native_report', id:item.id, filePath:item.filePath, sha256:await hashPath(item.filePath)});
+  for (const item of validated.reports) {
+    sources.push({kind:'native_report', id:item.id, filePath:item.filePath, sha256:await hashPath(item.filePath)});
+    sources.push(...(item.provenanceSources ?? []));
+  }
   sources.push({kind:'reasoning_unavailable_evidence', id:'solReasoning', filePath:resolvedEvidence, sha256:await hashPath(resolvedEvidence)});
   return {...validated, evidence, evidencePath:resolvedEvidence, resultsDir:root, sources, pins, formal:null};
 }
@@ -221,7 +262,7 @@ export function buildCaptureManifest(bundle, {outputDir, captureRequested}) {
   };
 }
 
-export function validateCaptureQuality({probe, decoded, timing}) {
+export function validateCaptureQuality({probe, decoded, timing, layout = null, expectedTileIds = null}) {
   const errors = [];
   const stream = probe?.streams?.find(item => item?.codec_type === 'video') ?? probe?.streams?.[0];
   const width = Number(stream?.width);
@@ -236,7 +277,20 @@ export function validateCaptureQuality({probe, decoded, timing}) {
   if (stream?.codec_name !== 'h264') errors.push('video codec must be H.264');
   if (decoded !== true) errors.push('full ffmpeg decode did not pass');
   errors.push(...validateBrowserTiming(timing).errors);
+  if (layout) errors.push(...validateCaptureLayout(layout, expectedTileIds).errors);
   return {valid:errors.length===0, errors, width, height, duration, frameRate, frameCount, codec:stream?.codec_name ?? null};
+}
+
+export function validateCaptureLayout(layout, expectedTileIds) {
+  const errors = [];
+  if (layout?.captureMode !== true) errors.push('capture-mode CSS was not enabled');
+  if (layout?.gateVisible !== false) errors.push('preflight gate is visible in the recording');
+  if (layout?.comparisonVisible !== true) errors.push('comparison grid is not visible');
+  if (!Array.isArray(layout?.tileIds) || JSON.stringify(layout.tileIds) !== JSON.stringify(expectedTileIds)) errors.push('recording must contain all nine tiles in display order');
+  if (layout?.reasoningHasIframe !== false) errors.push('Sol-Reasoning tile must remain static with no game iframe');
+  if (layout?.scrollHeight > layout?.viewportHeight || layout?.tilesWithinViewport !== true) errors.push('all nine tiles must fit inside the 1920x1080 recording viewport without scrolling');
+  if (layout?.viewportWidth !== VIDEO_SIZE.width || layout?.viewportHeight !== VIDEO_SIZE.height) errors.push('recording layout viewport must be 1920x1080');
+  return {valid:errors.length===0, errors};
 }
 
 export function validateBrowserTiming(timing) {
@@ -262,16 +316,19 @@ function parseFrameRate(value) {
   return Number(value);
 }
 
-export function buildCaptureQaArtifact({video, probe, timing, decoded, browser, frames}) {
+export function buildCaptureQaArtifact({video, probe, timing, decoded, browser, frames, layout = null, sourceManifestSha256 = null}) {
   return {
     artifactKind:'vector-run-video-capture-qa',
     artifactVersion:1,
-    status:'passed',
+    status:'automated_checks_passed_visual_review_pending',
     video:{...video, probe},
     browser,
     timing,
+    captureLayout:layout,
+    sourceManifestSha256,
     fullDecode:{passed:decoded, tool:'ffmpeg', mode:'full video decode to null output'},
-    qaFrames:frames
+    qaFrames:frames,
+    visualQA:{status:'pending',requiredFrames:frames.map(frame=>frame.relativePath)}
   };
 }
 
@@ -405,7 +462,7 @@ async function extractQaFrames(ffmpeg, videoPath, outputDir) {
   return frames.map(frame => path.join('qa', `${frame.label}.png`));
 }
 
-export async function captureComparison(bundle, {outputDir, contract, browserPath = null, headed = false, ffmpeg = 'ffmpeg', ffprobe = 'ffprobe'} = {}) {
+export async function captureComparison(bundle, {outputDir, contract, browserPath = null, headed = false, sourceManifestSha256 = null, ffmpeg = 'ffmpeg', ffprobe = 'ffprobe'} = {}) {
   const absoluteOutput = assertExternalOutput(outputDir);
   const playwright = await loadPlaywright();
   const executable = await findBrowser(browserPath);
@@ -425,7 +482,7 @@ export async function captureComparison(bundle, {outputDir, contract, browserPat
     await page.setViewportSize(VIDEO_SIZE);
     const pageErrors = [];
     page.on('pageerror', error => pageErrors.push(String(error?.message ?? error)));
-    await page.goto(`${serverHandle.url}/dist/comparison/index.html`, {waitUntil:'domcontentloaded', timeout:20000});
+    await page.goto(`${serverHandle.url}/dist/comparison/index.html?capture=1`, {waitUntil:'domcontentloaded', timeout:20000});
     await page.waitForFunction(() => Boolean(window.vectorComparison?.playComparison && window.vectorComparison?.validateComparisonGate), null, {timeout:15000});
     video = page.video();
     if (!video) throw new Error('Playwright video recording did not attach to the capture page');
@@ -454,6 +511,30 @@ export async function captureComparison(bundle, {outputDir, contract, browserPat
     await page.waitForFunction(() => window.vectorComparison.runtime.status === 'playing' || window.vectorComparison.runtime.status === 'failed', null, {timeout:10000});
     const runtimeState = await page.evaluate(() => ({status:window.vectorComparison.runtime.status, startedAt:window.vectorComparison.runtime.startedAt}));
     if (runtimeState.status !== 'playing' || !Number.isFinite(runtimeState.startedAt)) throw new Error(`comparison player did not start: ${runtimeState.status}`);
+    const layout = await page.evaluate(() => {
+      const visible = element => {
+        if (!element) return false;
+        const style = getComputedStyle(element);
+        const rect = element.getBoundingClientRect();
+        return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
+      };
+      const tiles = [...document.querySelectorAll('#grid .tile')];
+      const rects = tiles.map(tile => tile.getBoundingClientRect());
+      const reasoning = document.querySelector('[data-run-id="solReasoning"]');
+      return {
+        captureMode:document.body.classList.contains('capture-mode'),
+        gateVisible:visible(document.querySelector('#gate')),
+        comparisonVisible:visible(document.querySelector('#comparison')),
+        tileIds:tiles.map(tile => tile.dataset.runId),
+        reasoningHasIframe:Boolean(reasoning?.querySelector('iframe')),
+        viewportWidth:innerWidth,
+        viewportHeight:innerHeight,
+        scrollHeight:document.documentElement.scrollHeight,
+        tilesWithinViewport:rects.length === 9 && rects.every(rect => rect.top >= 0 && rect.bottom <= innerHeight)
+      };
+    });
+    const layoutCheck = validateCaptureLayout(layout, contract.DISPLAY_ORDER);
+    if (!layoutCheck.valid) throw new Error(`capture layout QA failed: ${layoutCheck.errors.join(' | ')}`);
     await page.waitForFunction(states => states.includes(window.vectorComparison.runtime.status), [...TERMINAL_PLAYBACK_STATES], {timeout:50000});
     const hostElapsedMs = performance.now() - playerStartedAt;
     const finished = await page.evaluate(() => ({
@@ -491,7 +572,7 @@ export async function captureComparison(bundle, {outputDir, contract, browserPat
     const probeProcess = await runProcess(ffprobe, ['-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=codec_type,codec_name,width,height,duration,avg_frame_rate,r_frame_rate,nb_frames:format=duration', '-of', 'json', mp4Path]);
     const probe = JSON.parse(probeProcess.stdout);
     const decode = await runProcess(ffmpeg, ['-v', 'error', '-i', mp4Path, '-f', 'null', '-']);
-    const qa = validateCaptureQuality({probe, decoded:decode.code === 0, timing});
+    const qa = validateCaptureQuality({probe, decoded:decode.code === 0, timing, layout, expectedTileIds:contract.DISPLAY_ORDER});
     if (!qa.valid) throw new Error(`encoded video QA failed: ${qa.errors.join(' | ')}`);
     const frames = await extractQaFrames(ffmpeg, mp4Path, absoluteOutput);
     const frameProofs = await Promise.all(frames.map(async relativePath => ({relativePath, sha256:await hashPath(path.join(absoluteOutput, relativePath))})));
@@ -501,8 +582,10 @@ export async function captureComparison(bundle, {outputDir, contract, browserPat
       probe,
       timing,
       decoded:decode.code === 0,
-      browser:{...{mode:launched.mode, executable:path.basename(executable)}, viewport:VIDEO_SIZE},
-      frames:frameProofs
+      browser:{mode:launched.mode, executable:path.basename(executable), headless:!headed, viewport:VIDEO_SIZE},
+      frames:frameProofs,
+      layout,
+      sourceManifestSha256
     });
     return {
       status:'complete',
@@ -512,6 +595,7 @@ export async function captureComparison(bundle, {outputDir, contract, browserPat
       resolution:{width:qa.width,height:qa.height},
       decoded:true,
       timing,
+      layout,
       qaFrames:frameProofs,
       qaArtifact
     };
@@ -555,12 +639,12 @@ async function main() {
   try {
     manifest.recording = {...manifest.recording, status:'capturing'};
     await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
-    const capture = await captureComparison(bundle, {outputDir, contract, browserPath:options.browserPath, headed:options.headed});
+    const capture = await captureComparison(bundle, {outputDir, contract, browserPath:options.browserPath, headed:options.headed, sourceManifestSha256:await hashPath(manifestPath)});
     const qaPath = path.join(outputDir, 'capture-qa.json');
     await writeFile(qaPath, `${JSON.stringify(capture.qaArtifact, null, 2)}\n`, 'utf8');
-    manifest.recording = {...manifest.recording, status:'complete', performed:true, outputFile:capture.file, durationSeconds:capture.durationSeconds, resolution:capture.resolution, decoded:capture.decoded, browser:capture.browser, timing:capture.timing, qaFrames:capture.qaFrames, qaFile:path.basename(qaPath), qaSha256:await hashPath(qaPath)};
+    manifest.recording = {...manifest.recording, status:'visual_review_pending', performed:true, automatedChecks:'passed', outputFile:capture.file, durationSeconds:capture.durationSeconds, resolution:capture.resolution, decoded:capture.decoded, browser:capture.browser, timing:capture.timing, captureLayout:capture.layout, qaFrames:capture.qaFrames, qaFile:path.basename(qaPath), qaSha256:await hashPath(qaPath)};
     await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
-    process.stdout.write(`Capture QA passed: ${path.join(outputDir, capture.file)}\n`);
+    process.stdout.write(`Automated capture QA passed; PNG visual review pending: ${path.join(outputDir, capture.file)}\n`);
   } catch (error) {
     manifest.recording = {...manifest.recording, status:'failed', performed:false, error:String(error?.message ?? error)};
     await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
