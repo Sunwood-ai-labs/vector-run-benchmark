@@ -14,6 +14,7 @@ import {
   isTerminalPlaybackState,
   loadFormalResultsBundle,
   parseArgs,
+  validateBrowserTiming,
   validateCaptureQuality
 } from '../../scripts/record-comparison.mjs';
 
@@ -187,6 +188,13 @@ test('capture watcher recognizes a terminal clock-gap rejection instead of timin
   assert.equal(isTerminalPlaybackState('invalid_start_spread'), true);
   assert.equal(isTerminalPlaybackState('failed'), true);
   assert.equal(isTerminalPlaybackState('playing'), false);
+});
+
+test('browser clock is gated independently before the encoded file exists', () => {
+  const timing={browserElapsedMs:33000,startSpreadMs:55,maxFrameGapMs:88};
+  assert.deepEqual(validateBrowserTiming(timing),{valid:true,errors:[]});
+  assert.equal(validateBrowserTiming({...timing,maxFrameGapMs:100.1}).valid,false);
+  assert.equal(validateBrowserTiming({...timing,browserElapsedMs:32799}).valid,false);
 });
 
 test('capture QA proof keeps the exact ffprobe, timing, decode, and screenshot evidence', () => {

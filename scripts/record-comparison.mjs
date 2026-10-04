@@ -235,10 +235,16 @@ export function validateCaptureQuality({probe, decoded, timing}) {
   if (!Number.isFinite(frameCount) || frameCount !== VIDEO_DURATION_SECONDS * VIDEO_FPS) errors.push(`video must contain ${VIDEO_DURATION_SECONDS * VIDEO_FPS} frames`);
   if (stream?.codec_name !== 'h264') errors.push('video codec must be H.264');
   if (decoded !== true) errors.push('full ffmpeg decode did not pass');
+  errors.push(...validateBrowserTiming(timing).errors);
+  return {valid:errors.length===0, errors, width, height, duration, frameRate, frameCount, codec:stream?.codec_name ?? null};
+}
+
+export function validateBrowserTiming(timing) {
+  const errors = [];
   if (!Number.isFinite(timing?.startSpreadMs) || timing.startSpreadMs > 100) errors.push('tile start spread must be at most 100 ms');
   if (!Number.isFinite(timing?.maxFrameGapMs) || timing.maxFrameGapMs > 100) errors.push('browser frame gaps must be at most 100 ms');
   if (!Number.isFinite(timing?.browserElapsedMs) || timing.browserElapsedMs < 32800 || timing.browserElapsedMs > 33200) errors.push('browser replay clock must run for 30 seconds plus a 3 second terminal hold at 1x');
-  return {valid:errors.length===0, errors, width, height, duration, frameRate, frameCount, codec:stream?.codec_name ?? null};
+  return {valid:errors.length===0, errors};
 }
 
 export function isTerminalPlaybackState(status) {
@@ -464,8 +470,7 @@ export async function captureComparison(bundle, {outputDir, contract, browserPat
       frameCount:Array.isArray(finished.frameGaps) ? finished.frameGaps.length : 0,
       recordingStartOffsetSeconds:finished.startedAt / 1000
     };
-    const timingProbe = {streams:[{codec_type:'video', width:VIDEO_SIZE.width, height:VIDEO_SIZE.height}], format:{duration:String(VIDEO_DURATION_SECONDS)}};
-    const timingCheck = validateCaptureQuality({probe:timingProbe, decoded:true, timing});
+    const timingCheck = validateBrowserTiming(timing);
     if (!timingCheck.valid) throw new Error(`browser timing QA failed: ${timingCheck.errors.join(' | ')}`);
 
     await context.close();
